@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Get, Body, HttpCode, HttpStatus, UnauthorizedException, BadRequestException, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
@@ -80,11 +80,17 @@ export class AdminAuthController {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
+    // Set trial to 14 days from now
+    const trialEndsAt = new Date();
+    trialEndsAt.setDate(trialEndsAt.getDate() + 14);
+
     const company = await this.prisma.company.create({
       data: {
         name: companyName.trim(),
         inviteCode,
-        subscriptionTier: 'basic',
+        subscriptionTier: 'professional',
+        subscriptionStatus: 'trial',
+        trialEndsAt,
       },
     });
 
@@ -111,6 +117,7 @@ export class AdminAuthController {
 
     console.log(`🏢 New company registered: ${company.name} (${inviteCode})`);
     console.log(`👤 Owner: ${user.name} (${user.email})`);
+    console.log(`🎁 Trial ends: ${trialEndsAt.toDateString()}`);
 
     return {
       accessToken,
@@ -180,6 +187,54 @@ export class AdminAuthController {
     };
   }
 
+  @Get('subscription-status')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Check subscription status' })
+  async getSubscriptionStatus(@Req() req) {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    let decoded;
+    try {
+      decoded = this.jwtService.verify(token);
+    } catch {
+      throw new UnauthorizedException('Invalid token');
+    }
+    
+    const company = await this.prisma.company.findUnique({
+      where: { id: decoded.companyId },
+      select: {
+        subscriptionStatus: true,
+        subscriptionTier: true,
+        trialEndsAt: true,
+        stripeCustomerId: true,
+      },
+    });
+
+    if (!company) {
+      throw new UnauthorizedException('Company not found');
+    }
+
+    const now = new Date();
+    const trialExpired = company.trialEndsAt && new Date(company.trialEndsAt) < now;
+    const isActive = company.subscriptionStatus === 'active' || 
+                     (company.subscriptionStatus === 'trial' && !trialExpired);
+
+    return {
+      status: company.subscriptionStatus,
+      tier: company.subscriptionTier,
+      trialEndsAt: company.trialEndsAt,
+      trialExpired,
+      isActive,
+      daysLeft: company.trialEndsAt 
+        ? Math.max(0, Math.ceil((new Date(company.trialEndsAt).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+        : null,
+    };
+  }
+
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request password reset email' })
@@ -224,7 +279,7 @@ export class AdminAuthController {
     try {
       await this.mailerService.sendMail({
         to: user.email!,
-        subject: 'ApexChronos - Reset Your Password',
+        subject: "Punch'd - Reset Your Password",
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #a855f7;">Reset Your Password</h2>
@@ -238,7 +293,7 @@ export class AdminAuthController {
             <p>This link expires in 1 hour.</p>
             <p>If you didn't request this, you can safely ignore this email.</p>
             <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-            <p style="color: #888; font-size: 12px;">ApexChronos Time & Attendance</p>
+            <p style="color: #888; font-size: 12px;">Punch'd by Krynovo</p>
           </div>
         `,
       });
