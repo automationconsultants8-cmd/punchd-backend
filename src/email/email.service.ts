@@ -1,0 +1,223 @@
+import { Injectable } from '@nestjs/common';
+import * as nodemailer from 'nodemailer';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class EmailService {
+  private transporter;
+
+  constructor(private prisma: PrismaService) {
+    this.transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+  }
+
+  async sendWeeklyReport(toEmail: string, companyId: string) {
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where: {
+        companyId,
+        clockInTime: { gte: weekAgo },
+      },
+      include: {
+        user: { select: { name: true } },
+        job: { select: { name: true } },
+      },
+    });
+
+    const totalMinutes = entries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+    const totalHours = (totalMinutes / 60).toFixed(1);
+    const totalBreakMinutes = entries.reduce((sum, e) => sum + (e.breakMinutes || 0), 0);
+
+    const workerHours: Record<string, number> = {};
+    entries.forEach(e => {
+      const name = e.user?.name || 'Unknown';
+      workerHours[name] = (workerHours[name] || 0) + (e.durationMinutes || 0);
+    });
+
+    const overtimeWorkers = Object.entries(workerHours)
+      .filter(([_, mins]) => mins > 40 * 60)
+      .map(([name, mins]) => ({
+        name,
+        hours: (mins / 60).toFixed(1),
+        overtime: ((mins / 60) - 40).toFixed(1),
+      }));
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h1 style="color: #a855f7; border-bottom: 2px solid #a855f7; padding-bottom: 10px;">
+          📊 Weekly Time & Attendance Report
+        </h1>
+
+        <p style="color: #666;">Report for: ${weekAgo.toLocaleDateString()} - ${new Date().toLocaleDateString()}</p>
+
+        <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h2 style="margin-top: 0; color: #333;">📈 Summary</h2>
+          <p><strong>Total Entries:</strong> ${entries.length}</p>
+          <p><strong>Total Hours Worked:</strong> ${totalHours} hours</p>
+          <p><strong>Total Break Time:</strong> ${(totalBreakMinutes / 60).toFixed(1)} hours</p>
+          <p><strong>Estimated Labor Cost:</strong> $${(parseFloat(totalHours) * 30).toFixed(2)}</p>
+        </div>
+
+        ${overtimeWorkers.length > 0 ? `
+          <div style="background: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
+            <h2 style="margin-top: 0; color: #856404;">⚠️ Overtime Alert</h2>
+            <p>The following workers exceeded 40 hours this week:</p>
+            <ul>
+              ${overtimeWorkers.map(w => `
+                <li><strong>${w.name}</strong>: ${w.hours} hours (${w.overtime} hrs overtime)</li>
+              `).join('')}
+            </ul>
+          </div>
+        ` : `
+          <div style="background: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
+            <h2 style="margin-top: 0; color: #155724;">✅ No Overtime</h2>
+            <p>All workers stayed under 40 hours this week.</p>
+          </div>
+        `}
+
+        <div style="background: #e9ecef; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h2 style="margin-top: 0; color: #333;">👷 Hours by Worker</h2>
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr style="background: #dee2e6;">
+              <th style="padding: 10px; text-align: left;">Worker</th>
+              <th style="padding: 10px; text-align: right;">Hours</th>
+            </tr>
+            ${Object.entries(workerHours)
+              .sort((a, b) => b[1] - a[1])
+              .map(([name, mins]) => `
+                <tr style="border-bottom: 1px solid #dee2e6;">
+                  <td style="padding: 10px;">${name}</td>
+                  <td style="padding: 10px; text-align: right;">${(mins / 60).toFixed(1)} hrs</td>
+                </tr>
+              `).join('')}
+          </table>
+        </div>
+
+        <p style="color: #999; font-size: 12px; text-align: center; margin-top: 30px;">
+          Sent by ApexChronos Time & Attendance System
+        </p>
+      </div>
+    `;
+
+    await this.transporter.sendMail({
+      from: `"ApexChronos" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: `📊 Weekly Report - ${new Date().toLocaleDateString()}`,
+      html,
+    });
+
+    return { success: true, message: 'Weekly report sent!' };
+  }
+
+  async sendOvertimeAlert(toEmail: string, workerName: string, totalHours: number) {
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h1 style="color: #dc3545;">⚠️ Overtime Alert</h1>
+        <p><strong>${workerName}</strong> has exceeded 40 hours this week.</p>
+        <p style="font-size: 24px; color: #dc3545;"><strong>${totalHours.toFixed(1)} hours</strong></p>
+        <p>Overtime hours: <strong>${(totalHours - 40).toFixed(1)} hours</strong></p>
+        <p>Estimated overtime cost: <strong>$${((totalHours - 40) * 15).toFixed(2)}</strong></p>
+        <hr />
+        <p style="color: #999; font-size: 12px;">ApexChronos Time & Attendance System</p>
+      </div>
+    `;
+
+    await this.transporter.sendMail({
+      from: `"ApexChronos" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: `⚠️ Overtime Alert: ${workerName}`,
+      html,
+    });
+
+    return { success: true };
+  }
+
+  async sendBuddyPunchAlert(
+    toEmail: string,
+    workerName: string,
+    workerPhone: string,
+    jobSiteName: string,
+    confidence: number,
+    photoUrl: string,
+  ) {
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #dc3545; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+          <h1 style="margin: 0;">🚨 BUDDY PUNCH ATTEMPT DETECTED</h1>
+        </div>
+        
+        <div style="background: #f8d7da; padding: 20px; border: 1px solid #f5c6cb; border-top: none;">
+          <p style="font-size: 18px; margin-top: 0;">
+            A clock-in attempt was <strong>BLOCKED</strong> due to face verification failure.
+          </p>
+          
+          <div style="background: white; padding: 15px; border-radius: 8px; margin: 15px 0;">
+            <h3 style="margin-top: 0; color: #333;">📋 Details</h3>
+            <table style="width: 100%;">
+              <tr>
+                <td style="padding: 8px 0; color: #666;"><strong>Worker Account:</strong></td>
+                <td style="padding: 8px 0;">${workerName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #666;"><strong>Phone:</strong></td>
+                <td style="padding: 8px 0;">${workerPhone}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #666;"><strong>Job Site:</strong></td>
+                <td style="padding: 8px 0;">${jobSiteName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #666;"><strong>Time:</strong></td>
+                <td style="padding: 8px 0;">${new Date().toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #666;"><strong>Face Match:</strong></td>
+                <td style="padding: 8px 0; color: #dc3545;"><strong>${confidence.toFixed(1)}%</strong> (Required: 80%)</td>
+              </tr>
+            </table>
+          </div>
+
+          <div style="background: white; padding: 15px; border-radius: 8px; margin: 15px 0;">
+            <h3 style="margin-top: 0; color: #333;">📸 Submitted Photo</h3>
+            <p style="color: #666; font-size: 14px;">The person who attempted to clock in:</p>
+            <img src="${photoUrl}" alt="Clock-in attempt photo" style="max-width: 100%; border-radius: 8px; border: 2px solid #dc3545;" />
+          </div>
+
+          <div style="background: #fff3cd; padding: 15px; border-radius: 8px; border-left: 4px solid #ffc107;">
+            <h4 style="margin-top: 0; color: #856404;">⚠️ Recommended Action</h4>
+            <ul style="margin-bottom: 0; color: #856404;">
+              <li>Review the submitted photo above</li>
+              <li>Contact ${workerName} to verify the situation</li>
+              <li>Consider reviewing other recent clock-ins for this worker</li>
+              <li>If confirmed buddy punching, take appropriate disciplinary action</li>
+            </ul>
+          </div>
+        </div>
+
+        <div style="background: #333; color: #999; padding: 15px; border-radius: 0 0 8px 8px; text-align: center;">
+          <p style="margin: 0; font-size: 12px;">
+            ApexChronos Time & Attendance System<br />
+            This is an automated security alert
+          </p>
+        </div>
+      </div>
+    `;
+
+    await this.transporter.sendMail({
+      from: `"ApexChronos Security" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: `🚨 ALERT: Buddy Punch Attempt Blocked - ${workerName}`,
+      html,
+    });
+
+    console.log(`📧 Buddy punch alert sent to ${toEmail}`);
+    return { success: true };
+  }
+}

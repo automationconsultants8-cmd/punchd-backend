@@ -1,0 +1,284 @@
+// This is your Prisma schema file
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id                String   @id @default(uuid())
+  name              String
+  inviteCode        String   @unique @default(uuid())
+  subscriptionTier  String   @default("basic")
+  subscriptionStatus    String    @default("active")
+  stripeCustomerId      String?
+  stripeSubscriptionId  String?
+  trialEndsAt           DateTime?
+  settings          Json     @default("{}")
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  users             User[]
+  jobs              Job[]
+  timeEntries       TimeEntry[]
+  violations        Violation[]
+  faceVerificationLogs FaceVerificationLog[]
+  shifts            Shift[]
+  auditLogs         AuditLog[]
+
+  @@map("companies")
+}
+
+enum UserRole {
+  WORKER
+  MANAGER
+  ADMIN
+  OWNER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id                  String         @id @default(uuid())
+  companyId           String
+  email               String?
+  phone               String
+  name                String
+  role                UserRole       @default(WORKER)
+  referencePhotoUrl   String?
+  rekognitionFaceId   String?
+  isActive            Boolean        @default(true)
+  approvalStatus      ApprovalStatus @default(APPROVED)
+  passwordHash        String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  company             Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  timeEntries         TimeEntry[]
+  violations          Violation[]
+  faceVerificationLogs FaceVerificationLog[]
+  shifts              Shift[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@unique([companyId, phone])
+  @@index([companyId, email])
+  @@map("users")
+}
+
+model PasswordResetToken {
+  id          String    @id @default(uuid())
+  userId      String
+  token       String    @unique
+  expiresAt   DateTime
+  used        Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token, used, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model Job {
+  id                    String    @id @default(uuid())
+  companyId             String
+  name                  String
+  address               String
+  geofenceCenter        String
+  geofenceRadiusMeters  Int       @default(100)
+  isActive              Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  timeEntries           TimeEntry[]
+  shifts                Shift[]
+
+  @@index([companyId, isActive])
+  @@map("jobs")
+}
+
+enum EntryType {
+  JOB_TIME
+  TRAVEL_TIME
+}
+
+model TimeEntry {
+  id                String   @id @default(uuid())
+  companyId         String?
+  userId            String
+  jobId             String?
+  clockInTime       DateTime
+  clockOutTime      DateTime?
+  clockInPhotoUrl   String?
+  clockOutPhotoUrl  String?
+  clockInLocation   String?
+  clockOutLocation  String?
+  durationMinutes   Int?
+  isFlagged         Boolean  @default(false)
+  flagReason        String?
+  notes             String?
+
+  breakStartTime    DateTime?
+  breakEndTime      DateTime?
+  breakMinutes      Int       @default(0)
+  isOnBreak         Boolean   @default(false)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company           Company?  @relation(fields: [companyId], references: [id])
+  user              User      @relation(fields: [userId], references: [id])
+  job               Job?      @relation(fields: [jobId], references: [id])
+  violations        Violation[]
+  faceVerificationLogs FaceVerificationLog[]
+
+  @@map("time_entries")
+}
+
+enum ViolationType {
+  OUTSIDE_GEOFENCE
+  LOCATION_TELEPORT
+  FACE_MISMATCH
+  EARLY_CLOCK_IN
+  LATE_CLOCK_OUT
+  PHOTO_REUSE
+  SUSPICIOUS_PATTERN
+}
+
+enum ViolationSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Violation {
+  id            String              @id @default(uuid())
+  companyId     String
+  timeEntryId   String
+  userId        String
+  violationType ViolationType
+  severity      ViolationSeverity
+  metadata      Json                @default("{}")
+  reviewed      Boolean             @default(false)
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  createdAt     DateTime            @default(now())
+
+  company       Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  timeEntry     TimeEntry           @relation(fields: [timeEntryId], references: [id], onDelete: Cascade)
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, reviewed])
+  @@index([companyId, severity])
+  @@index([userId, createdAt])
+  @@map("violations")
+}
+
+model FaceVerificationLog {
+  id                  String    @id @default(uuid())
+  companyId           String
+  userId              String
+  timeEntryId         String?
+  submittedPhotoUrl   String
+  confidenceScore     Float
+  matched             Boolean
+  rekognitionResponse Json
+  createdAt           DateTime  @default(now())
+
+  company             Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timeEntry           TimeEntry? @relation(fields: [timeEntryId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, userId])
+  @@index([timeEntryId])
+  @@map("face_verification_logs")
+}
+
+model OtpCode {
+  id          String    @id @default(uuid())
+  phone       String
+  code        String
+  expiresAt   DateTime
+  verified    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  @@index([phone, verified, expiresAt])
+  @@map("otp_codes")
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model Shift {
+  id            String      @id @default(uuid())
+  companyId     String
+  userId        String
+  jobId         String
+  shiftDate     DateTime    @db.Date
+  startTime     DateTime
+  endTime       DateTime
+  status        ShiftStatus @default(SCHEDULED)
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job           Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, shiftDate])
+  @@index([userId, shiftDate])
+  @@index([jobId, shiftDate])
+  @@map("shifts")
+}
+enum AuditAction {
+  USER_CREATED
+  USER_UPDATED
+  USER_APPROVED
+  USER_REJECTED
+  USER_DEACTIVATED
+  USER_PHONE_CHANGED
+  USER_ROLE_CHANGED
+  JOB_CREATED
+  JOB_UPDATED
+  JOB_DELETED
+  SHIFT_CREATED
+  SHIFT_UPDATED
+  SHIFT_DELETED
+  COMPANY_SETTINGS_UPDATED
+  LOGIN
+  PASSWORD_RESET
+}
+
+model AuditLog {
+  id          String      @id @default(uuid())
+  companyId   String
+  userId      String?     // Who performed the action
+  action      AuditAction
+  targetType  String?     // e.g., "USER", "JOB", "SHIFT"
+  targetId    String?     // ID of the affected record
+  details     Json        @default("{}")  // Additional context
+  ipAddress   String?
+  createdAt   DateTime    @default(now())
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, action])
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}
