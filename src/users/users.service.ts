@@ -49,7 +49,7 @@ export class UsersService {
         name: dto.name,
         phone: formattedPhone,
         email: dto.email,
-        role: dto.role || 'WORKER',
+        role: (dto.role as any) || 'WORKER',
         referencePhotoUrl: referencePhotoUrl || undefined,
         hourlyRate: dto.hourlyRate ? new Decimal(dto.hourlyRate) : null,
       },
@@ -228,7 +228,7 @@ export class UsersService {
     const updateData: any = {
       name: dto.name,
       email: dto.email,
-      role: dto.role,
+      role: dto.role as any,
       isActive: dto.isActive,
       approvalStatus: dto.approvalStatus,
     };
