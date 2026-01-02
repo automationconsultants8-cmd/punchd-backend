@@ -1,5 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsEmail, IsOptional, IsEnum, IsBoolean } from 'class-validator';
+export * from './create-user.dto';
+export * from './update-user.dto';
+export * from './worker-job-rate.dto';
 
 export enum UserRole {
   WORKER = 'WORKER',
