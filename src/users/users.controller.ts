@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
-import { CreateUserDto, UpdateUserDto } from './dto';
+import { CreateUserDto, UpdateUserDto, SetWorkerJobRateDto } from './dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -46,5 +46,36 @@ export class UsersController {
   @ApiOperation({ summary: 'Deactivate user' })
   remove(@Request() req, @Param('id') id: string) {
     return this.usersService.remove(req.user.companyId, id, req.user.userId);
+  }
+
+  // ============ PAY RATE ENDPOINTS ============
+
+  @Get(':id/rates')
+  @Roles('OWNER', 'ADMIN', 'MANAGER')
+  @ApiOperation({ summary: 'Get all job-specific rates for a worker' })
+  getWorkerRates(@Request() req, @Param('id') id: string) {
+    return this.usersService.getWorkerJobRates(req.user.companyId, id);
+  }
+
+  @Post(':id/rates')
+  @Roles('OWNER', 'ADMIN')
+  @ApiOperation({ summary: 'Set job-specific rate for a worker' })
+  setWorkerJobRate(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() dto: SetWorkerJobRateDto,
+  ) {
+    return this.usersService.setWorkerJobRate(req.user.companyId, id, dto, req.user.userId);
+  }
+
+  @Delete(':id/rates/:jobId')
+  @Roles('OWNER', 'ADMIN')
+  @ApiOperation({ summary: 'Remove job-specific rate for a worker' })
+  removeWorkerJobRate(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('jobId') jobId: string,
+  ) {
+    return this.usersService.removeWorkerJobRate(req.user.companyId, id, jobId, req.user.userId);
   }
 }
