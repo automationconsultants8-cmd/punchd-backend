@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, Query, UseGuards, Request } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { TimeEntriesService } from './time-entries.service';
 import { ClockInDto, ClockOutDto } from './dto';
+import { ApproveTimeEntryDto, BulkApproveDto, BulkRejectDto } from './dto/approve-time-entry.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Time Entries')
@@ -47,6 +48,18 @@ export class TimeEntriesController {
     return this.timeEntriesService.getTimeEntries(req.user.companyId, {});
   }
 
+  @Get('pending')
+  @ApiOperation({ summary: 'Get all pending time entries for approval' })
+  getPendingApprovals(@Request() req) {
+    return this.timeEntriesService.getPendingApprovals(req.user.companyId);
+  }
+
+  @Get('approval-stats')
+  @ApiOperation({ summary: 'Get approval statistics' })
+  getApprovalStats(@Request() req) {
+    return this.timeEntriesService.getApprovalStats(req.user.companyId);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get time entries with filters' })
   @ApiQuery({ name: 'userId', required: false, type: String })
@@ -54,6 +67,7 @@ export class TimeEntriesController {
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiQuery({ name: 'entryType', required: false, enum: ['JOB_TIME', 'TRAVEL_TIME'] })
+  @ApiQuery({ name: 'approvalStatus', required: false, enum: ['PENDING', 'APPROVED', 'REJECTED'] })
   getTimeEntries(
     @Request() req,
     @Query('userId') userId?: string,
@@ -61,6 +75,7 @@ export class TimeEntriesController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('entryType') entryType?: 'JOB_TIME' | 'TRAVEL_TIME',
+    @Query('approvalStatus') approvalStatus?: 'PENDING' | 'APPROVED' | 'REJECTED',
   ) {
     return this.timeEntriesService.getTimeEntries(req.user.companyId, {
       userId,
@@ -68,6 +83,46 @@ export class TimeEntriesController {
       startDate: startDate ? new Date(startDate) : undefined,
       endDate: endDate ? new Date(endDate) : undefined,
       entryType,
+      approvalStatus,
     });
+  }
+
+  @Patch(':id/approve')
+  @ApiOperation({ summary: 'Approve a time entry' })
+  @ApiParam({ name: 'id', description: 'Time entry ID' })
+  approveEntry(
+    @Request() req,
+    @Param('id') id: string,
+  ) {
+    return this.timeEntriesService.approveEntry(id, req.user.userId, req.user.companyId);
+  }
+
+  @Patch(':id/reject')
+  @ApiOperation({ summary: 'Reject a time entry' })
+  @ApiParam({ name: 'id', description: 'Time entry ID' })
+  rejectEntry(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() dto: ApproveTimeEntryDto,
+  ) {
+    return this.timeEntriesService.rejectEntry(id, req.user.userId, req.user.companyId, dto.rejectionReason);
+  }
+
+  @Post('bulk-approve')
+  @ApiOperation({ summary: 'Approve multiple time entries at once' })
+  bulkApprove(
+    @Request() req,
+    @Body() dto: BulkApproveDto,
+  ) {
+    return this.timeEntriesService.bulkApprove(dto.entryIds, req.user.userId, req.user.companyId);
+  }
+
+  @Post('bulk-reject')
+  @ApiOperation({ summary: 'Reject multiple time entries at once' })
+  bulkReject(
+    @Request() req,
+    @Body() dto: BulkRejectDto,
+  ) {
+    return this.timeEntriesService.bulkReject(dto.entryIds, req.user.userId, req.user.companyId, dto.rejectionReason);
   }
 }
