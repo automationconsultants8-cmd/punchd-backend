@@ -9,27 +9,28 @@ datasource db {
 }
 
 model Company {
-  id                String   @id @default(uuid())
-  name              String
-  inviteCode        String   @unique @default(uuid())
-  subscriptionTier  String   @default("basic")
-  subscriptionStatus    String    @default("active")
+  id                    String   @id @default(uuid())
+  name                  String
+  inviteCode            String   @unique @default(uuid())
+  subscriptionTier      String   @default("basic")
+  subscriptionStatus    String   @default("active")
   stripeCustomerId      String?
   stripeSubscriptionId  String?
   trialEndsAt           DateTime?
-  settings          Json     @default("{}")
-  isActive          Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  settings              Json     @default("{}")
+  overtimeSettings      Json     @default("{\"dailyOtThreshold\": 480, \"dailyDtThreshold\": 720, \"weeklyOtThreshold\": 2400, \"otMultiplier\": 1.5, \"dtMultiplier\": 2.0}")
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
-  users             User[]
-  jobs              Job[]
-  timeEntries       TimeEntry[]
-  violations        Violation[]
-  faceVerificationLogs FaceVerificationLog[]
-  shifts            Shift[]
-  auditLogs         AuditLog[]
-  workerJobRates    WorkerJobRate[]
+  users                 User[]
+  jobs                  Job[]
+  timeEntries           TimeEntry[]
+  violations            Violation[]
+  faceVerificationLogs  FaceVerificationLog[]
+  shifts                Shift[]
+  auditLogs             AuditLog[]
+  workerJobRates        WorkerJobRate[]
 
   @@map("companies")
 }
@@ -78,19 +79,19 @@ model User {
 }
 
 model WorkerJobRate {
-  id          String   @id @default(uuid())
-  companyId   String
-  userId      String
-  jobId       String
-  hourlyRate  Decimal  @db.Decimal(10, 2)
+  id              String   @id @default(uuid())
+  companyId       String
+  userId          String
+  jobId           String
+  hourlyRate      Decimal  @db.Decimal(10, 2)
   isPrevailingWage Boolean @default(false)
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job             Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@unique([userId, jobId])
   @@index([companyId])
@@ -170,6 +171,16 @@ model TimeEntry {
   laborCost         Decimal?  @db.Decimal(10, 2)
   isPrevailingWage  Boolean   @default(false)
 
+  // Overtime breakdown (in minutes)
+  regularMinutes    Int       @default(0)
+  overtimeMinutes   Int       @default(0)
+  doubleTimeMinutes Int       @default(0)
+
+  // Pay breakdown
+  regularPay        Decimal?  @db.Decimal(10, 2)
+  overtimePay       Decimal?  @db.Decimal(10, 2)
+  doubleTimePay     Decimal?  @db.Decimal(10, 2)
+
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -181,6 +192,7 @@ model TimeEntry {
   faceVerificationLogs FaceVerificationLog[]
 
   @@index([companyId, approvalStatus])
+  @@index([userId, clockInTime])
   @@map("time_entries")
 }
 
@@ -306,6 +318,7 @@ enum AuditAction {
   TIME_ENTRY_APPROVED
   TIME_ENTRY_REJECTED
   PAY_RATE_UPDATED
+  OVERTIME_SETTINGS_UPDATED
 }
 
 model AuditLog {
