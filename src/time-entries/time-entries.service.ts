@@ -1,8 +1,9 @@
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JobsService } from '../jobs/jobs.service';
 import { AwsService } from '../aws/aws.service';
 import { EmailService } from '../email/email.service';
+import { AuditService } from '../audit/audit.service';
 import { ClockInDto, ClockOutDto } from './dto';
 
 @Injectable()
@@ -12,6 +13,7 @@ export class TimeEntriesService {
     private jobsService: JobsService,
     private awsService: AwsService,
     private emailService: EmailService,
+    private auditService: AuditService,
   ) {}
 
   async clockIn(userId: string, companyId: string, dto: ClockInDto) {
@@ -23,12 +25,10 @@ export class TimeEntriesService {
       throw new BadRequestException('You are already clocked in. Please clock out first.');
     }
 
-    // Get user with reference photo
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
 
-    // Get job info for alert
     let jobName = 'Unknown';
     const flagReasons: string[] = [];
     let jobId: string | null = null;
@@ -62,7 +62,6 @@ export class TimeEntriesService {
       jobId = dto.jobId;
     }
 
-    // Upload photo to S3
     let photoUrl = 'placeholder.jpg';
     if (dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
       try {
@@ -73,7 +72,6 @@ export class TimeEntriesService {
       }
     }
 
-    // Create the time entry first
     const timeEntry = await this.prisma.timeEntry.create({
       data: {
         companyId,
@@ -84,6 +82,7 @@ export class TimeEntriesService {
         clockInPhotoUrl: photoUrl,
         isFlagged: flagReasons.length > 0,
         flagReason: flagReasons.join(', '),
+        approvalStatus: 'PENDING',
       },
       include: {
         job: true,
@@ -91,23 +90,17 @@ export class TimeEntriesService {
       },
     });
 
-    // Face verification (if user has reference photo)
     if (user?.referencePhotoUrl && photoUrl !== 'placeholder.jpg') {
       try {
         console.log('🔍 Starting face verification...');
-        console.log('Reference photo:', user.referencePhotoUrl);
-        console.log('Clock-in photo:', photoUrl);
-
         const confidence = await this.awsService.compareFaces(
           user.referencePhotoUrl,
           photoUrl,
         );
 
-        const matched = confidence >= 80; // 80% threshold
-
+        const matched = confidence >= 80;
         console.log(`✅ Face verification result: ${confidence}% confidence, matched: ${matched}`);
 
-        // Log the verification
         await this.prisma.faceVerificationLog.create({
           data: {
             companyId,
@@ -120,16 +113,10 @@ export class TimeEntriesService {
           },
         });
 
-        // BLOCK clock-in if face doesn't match
         if (!matched) {
           console.log('⚠️ Face mismatch - BLOCKING clock-in!');
+          await this.prisma.timeEntry.delete({ where: { id: timeEntry.id } });
 
-          // Delete the time entry we just created
-          await this.prisma.timeEntry.delete({
-            where: { id: timeEntry.id },
-          });
-
-          // Get admin emails to notify
           const admins = await this.prisma.user.findMany({
             where: {
               companyId,
@@ -139,7 +126,6 @@ export class TimeEntriesService {
             select: { email: true },
           });
 
-          // Send buddy punch alert to all admins
           for (const admin of admins) {
             if (admin.email) {
               try {
@@ -162,34 +148,25 @@ export class TimeEntriesService {
           );
         }
       } catch (err) {
-        // If it's our ForbiddenException, rethrow it
         if (err instanceof ForbiddenException) {
           throw err;
         }
-
         console.error('❌ Face verification error:', err);
-        // For other errors, flag the entry but allow clock-in
         const updatedFlagReasons = timeEntry.flagReason
           ? `${timeEntry.flagReason}, FACE_VERIFICATION_ERROR`
           : 'FACE_VERIFICATION_ERROR';
 
         await this.prisma.timeEntry.update({
           where: { id: timeEntry.id },
-          data: {
-            isFlagged: true,
-            flagReason: updatedFlagReasons,
-          },
+          data: { isFlagged: true, flagReason: updatedFlagReasons },
         });
       }
     } else if (!user?.referencePhotoUrl && photoUrl !== 'placeholder.jpg') {
-      // No reference photo - set this as the reference (first clock-in becomes reference)
       console.log('📸 No reference photo found. Setting first clock-in photo as reference...');
-
       await this.prisma.user.update({
         where: { id: userId },
         data: { referencePhotoUrl: photoUrl },
       });
-
       console.log('✅ Reference photo set for user:', userId);
     }
 
@@ -254,10 +231,7 @@ export class TimeEntriesService {
 
     return this.prisma.timeEntry.update({
       where: { id: activeEntry.id },
-      data: {
-        isOnBreak: true,
-        breakStartTime: new Date(),
-      },
+      data: { isOnBreak: true, breakStartTime: new Date() },
       include: {
         job: true,
         user: { select: { id: true, name: true, phone: true } },
@@ -303,6 +277,7 @@ export class TimeEntriesService {
     if (companyId) where.companyId = companyId;
     if (filters?.userId) where.userId = filters.userId;
     if (filters?.jobId) where.jobId = filters.jobId;
+    if (filters?.approvalStatus) where.approvalStatus = filters.approvalStatus;
     if (filters?.startDate || filters?.endDate) {
       where.clockInTime = {};
       if (filters.startDate) where.clockInTime.gte = filters.startDate;
@@ -314,6 +289,7 @@ export class TimeEntriesService {
       include: {
         user: { select: { id: true, name: true, phone: true } },
         job: true,
+        approvedBy: { select: { id: true, name: true } },
       },
       orderBy: { clockInTime: 'desc' },
     });
@@ -330,5 +306,165 @@ export class TimeEntriesService {
       isOnBreak: activeEntry?.isOnBreak || false,
       activeEntry: activeEntry || null,
     };
+  }
+
+  // ============ APPROVAL WORKFLOW METHODS ============
+
+  async getPendingApprovals(companyId: string) {
+    return this.prisma.timeEntry.findMany({
+      where: {
+        companyId,
+        approvalStatus: 'PENDING',
+        clockOutTime: { not: null },
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+      },
+      orderBy: { clockInTime: 'desc' },
+    });
+  }
+
+  async getApprovalStats(companyId: string) {
+    const [pending, approved, rejected] = await Promise.all([
+      this.prisma.timeEntry.count({
+        where: { companyId, approvalStatus: 'PENDING', clockOutTime: { not: null } },
+      }),
+      this.prisma.timeEntry.count({
+        where: { companyId, approvalStatus: 'APPROVED' },
+      }),
+      this.prisma.timeEntry.count({
+        where: { companyId, approvalStatus: 'REJECTED' },
+      }),
+    ]);
+
+    return { pending, approved, rejected };
+  }
+
+  async approveEntry(entryId: string, approverId: string, companyId: string) {
+    const entry = await this.prisma.timeEntry.findFirst({
+      where: { id: entryId, companyId },
+      include: { user: { select: { id: true, name: true } } },
+    });
+
+    if (!entry) {
+      throw new NotFoundException('Time entry not found');
+    }
+
+    if (entry.approvalStatus !== 'PENDING') {
+      throw new BadRequestException(`Entry is already ${entry.approvalStatus.toLowerCase()}`);
+    }
+
+    if (!entry.clockOutTime) {
+      throw new BadRequestException('Cannot approve an entry that is still active');
+    }
+
+    const updated = await this.prisma.timeEntry.update({
+      where: { id: entryId },
+      data: {
+        approvalStatus: 'APPROVED',
+        approvedById: approverId,
+        approvedAt: new Date(),
+        rejectionReason: null,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+        approvedBy: { select: { id: true, name: true } },
+      },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId: approverId,
+      action: 'TIME_ENTRY_APPROVED',
+      targetType: 'TIME_ENTRY',
+      targetId: entryId,
+      details: {
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        durationMinutes: entry.durationMinutes,
+      },
+    });
+
+    return updated;
+  }
+
+  async rejectEntry(entryId: string, approverId: string, companyId: string, reason?: string) {
+    const entry = await this.prisma.timeEntry.findFirst({
+      where: { id: entryId, companyId },
+      include: { user: { select: { id: true, name: true } } },
+    });
+
+    if (!entry) {
+      throw new NotFoundException('Time entry not found');
+    }
+
+    if (entry.approvalStatus !== 'PENDING') {
+      throw new BadRequestException(`Entry is already ${entry.approvalStatus.toLowerCase()}`);
+    }
+
+    const updated = await this.prisma.timeEntry.update({
+      where: { id: entryId },
+      data: {
+        approvalStatus: 'REJECTED',
+        approvedById: approverId,
+        approvedAt: new Date(),
+        rejectionReason: reason || 'No reason provided',
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+        approvedBy: { select: { id: true, name: true } },
+      },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId: approverId,
+      action: 'TIME_ENTRY_REJECTED',
+      targetType: 'TIME_ENTRY',
+      targetId: entryId,
+      details: {
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        durationMinutes: entry.durationMinutes,
+        rejectionReason: reason,
+      },
+    });
+
+    return updated;
+  }
+
+  async bulkApprove(entryIds: string[], approverId: string, companyId: string) {
+    const results = { approved: 0, failed: 0, errors: [] as string[] };
+
+    for (const entryId of entryIds) {
+      try {
+        await this.approveEntry(entryId, approverId, companyId);
+        results.approved++;
+      } catch (err) {
+        results.failed++;
+        results.errors.push(`${entryId}: ${err.message}`);
+      }
+    }
+
+    return results;
+  }
+
+  async bulkReject(entryIds: string[], approverId: string, companyId: string, reason: string) {
+    const results = { rejected: 0, failed: 0, errors: [] as string[] };
+
+    for (const entryId of entryIds) {
+      try {
+        await this.rejectEntry(entryId, approverId, companyId, reason);
+        results.rejected++;
+      } catch (err) {
+        results.failed++;
+        results.errors.push(`${entryId}: ${err.message}`);
+      }
+    }
+
+    return results;
   }
 }
