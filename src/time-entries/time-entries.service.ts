@@ -125,7 +125,7 @@ export class TimeEntriesService {
     }
 
     // Get effective rate for this worker/job combination
-    const { rate, isPrevailingWage } = await this.getEffectiveRate(companyId, userId, jobId);
+    const { rate, isPrevailingWage } = await this.getEffectiveRate(companyId, userId, jobId || undefined);
 
     const timeEntry = await this.prisma.timeEntry.create({
       data: {
