@@ -17,7 +17,9 @@ export type AuditAction =
   | 'SHIFT_DELETED'
   | 'COMPANY_SETTINGS_UPDATED'
   | 'LOGIN'
-  | 'PASSWORD_RESET';
+  | 'PASSWORD_RESET'
+  | 'TIME_ENTRY_APPROVED'
+  | 'TIME_ENTRY_REJECTED';
 
 @Injectable()
 export class AuditService {
@@ -44,7 +46,6 @@ export class AuditService {
           ipAddress: params.ipAddress,
         },
       });
-
       console.log(`📝 Audit: ${params.action} by ${params.userId || 'system'} on ${params.targetType}:${params.targetId}`);
     } catch (err) {
       console.error('Failed to create audit log:', err);
