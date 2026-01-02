@@ -29,6 +29,7 @@ model Company {
   faceVerificationLogs FaceVerificationLog[]
   shifts            Shift[]
   auditLogs         AuditLog[]
+  workerJobRates    WorkerJobRate[]
 
   @@map("companies")
 }
@@ -58,6 +59,7 @@ model User {
   isActive            Boolean        @default(true)
   approvalStatus      ApprovalStatus @default(APPROVED)
   passwordHash        String?
+  hourlyRate          Decimal?       @db.Decimal(10, 2)
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
@@ -68,10 +70,31 @@ model User {
   shifts              Shift[]
   passwordResetTokens PasswordResetToken[]
   approvedTimeEntries TimeEntry[] @relation("ApprovedTimeEntries")
+  jobRates            WorkerJobRate[]
 
   @@unique([companyId, phone])
   @@index([companyId, email])
   @@map("users")
+}
+
+model WorkerJobRate {
+  id          String   @id @default(uuid())
+  companyId   String
+  userId      String
+  jobId       String
+  hourlyRate  Decimal  @db.Decimal(10, 2)
+  isPrevailingWage Boolean @default(false)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([companyId])
+  @@map("worker_job_rates")
 }
 
 model PasswordResetToken {
@@ -96,12 +119,15 @@ model Job {
   geofenceCenter        String
   geofenceRadiusMeters  Int       @default(100)
   isActive              Boolean   @default(true)
+  defaultHourlyRate     Decimal?  @db.Decimal(10, 2)
+  isPrevailingWage      Boolean   @default(false)
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   timeEntries           TimeEntry[]
   shifts                Shift[]
+  workerJobRates        WorkerJobRate[]
 
   @@index([companyId, isActive])
   @@map("jobs")
@@ -138,6 +164,11 @@ model TimeEntry {
   approvedById      String?
   approvedAt        DateTime?
   rejectionReason   String?
+
+  // Pay rate fields (snapshot at time of entry)
+  hourlyRate        Decimal?  @db.Decimal(10, 2)
+  laborCost         Decimal?  @db.Decimal(10, 2)
+  isPrevailingWage  Boolean   @default(false)
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -274,6 +305,7 @@ enum AuditAction {
   PASSWORD_RESET
   TIME_ENTRY_APPROVED
   TIME_ENTRY_REJECTED
+  PAY_RATE_UPDATED
 }
 
 model AuditLog {
