@@ -60,6 +60,22 @@ export class TimeEntriesController {
     return this.timeEntriesService.getApprovalStats(req.user.companyId);
   }
 
+  @Get('overtime-summary')
+  @ApiOperation({ summary: 'Get overtime summary with breakdown' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  getOvertimeSummary(
+    @Request() req,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.timeEntriesService.getOvertimeSummary(
+      req.user.companyId,
+      startDate ? new Date(startDate) : undefined,
+      endDate ? new Date(endDate) : undefined,
+    );
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get time entries with filters' })
   @ApiQuery({ name: 'userId', required: false, type: String })
