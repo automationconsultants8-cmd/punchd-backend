@@ -19,7 +19,8 @@ export type AuditAction =
   | 'LOGIN'
   | 'PASSWORD_RESET'
   | 'TIME_ENTRY_APPROVED'
-  | 'TIME_ENTRY_REJECTED';
+  | 'TIME_ENTRY_REJECTED'
+  | 'PAY_RATE_UPDATED';
 
 @Injectable()
 export class AuditService {
