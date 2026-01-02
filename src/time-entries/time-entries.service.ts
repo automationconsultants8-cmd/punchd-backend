@@ -5,6 +5,7 @@ import { AwsService } from '../aws/aws.service';
 import { EmailService } from '../email/email.service';
 import { AuditService } from '../audit/audit.service';
 import { ClockInDto, ClockOutDto } from './dto';
+import { Decimal } from '@prisma/client/runtime/library';
 
 @Injectable()
 export class TimeEntriesService {
@@ -15,6 +16,57 @@ export class TimeEntriesService {
     private emailService: EmailService,
     private auditService: AuditService,
   ) {}
+
+  // Get effective rate for a worker on a specific job
+  private async getEffectiveRate(companyId: string, userId: string, jobId?: string): Promise<{ rate: number | null; isPrevailingWage: boolean }> {
+    // If job specified, check for job-specific rate first
+    if (jobId) {
+      const jobRate = await this.prisma.workerJobRate.findFirst({
+        where: { companyId, userId, jobId },
+      });
+
+      if (jobRate) {
+        return { 
+          rate: Number(jobRate.hourlyRate), 
+          isPrevailingWage: jobRate.isPrevailingWage,
+        };
+      }
+
+      // Check job default rate
+      const job = await this.prisma.job.findFirst({
+        where: { id: jobId, companyId },
+        select: { defaultHourlyRate: true, isPrevailingWage: true },
+      });
+
+      if (job?.defaultHourlyRate) {
+        return { 
+          rate: Number(job.defaultHourlyRate), 
+          isPrevailingWage: job.isPrevailingWage,
+        };
+      }
+    }
+
+    // Fall back to worker default rate
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, companyId },
+      select: { hourlyRate: true },
+    });
+
+    if (user?.hourlyRate) {
+      return { 
+        rate: Number(user.hourlyRate), 
+        isPrevailingWage: false,
+      };
+    }
+
+    return { rate: null, isPrevailingWage: false };
+  }
+
+  // Calculate labor cost from duration and rate
+  private calculateLaborCost(durationMinutes: number, hourlyRate: number): number {
+    const hours = durationMinutes / 60;
+    return Math.round(hours * hourlyRate * 100) / 100; // Round to 2 decimal places
+  }
 
   async clockIn(userId: string, companyId: string, dto: ClockInDto) {
     const activeEntry = await this.prisma.timeEntry.findFirst({
@@ -72,6 +124,9 @@ export class TimeEntriesService {
       }
     }
 
+    // Get effective rate for this worker/job combination
+    const { rate, isPrevailingWage } = await this.getEffectiveRate(companyId, userId, jobId);
+
     const timeEntry = await this.prisma.timeEntry.create({
       data: {
         companyId,
@@ -83,13 +138,16 @@ export class TimeEntriesService {
         isFlagged: flagReasons.length > 0,
         flagReason: flagReasons.join(', '),
         approvalStatus: 'PENDING',
+        hourlyRate: rate ? new Decimal(rate) : null,
+        isPrevailingWage,
       },
       include: {
         job: true,
-        user: { select: { id: true, name: true, phone: true } },
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
       },
     });
 
+    // Face verification (if user has reference photo)
     if (user?.referencePhotoUrl && photoUrl !== 'placeholder.jpg') {
       try {
         console.log('🔍 Starting face verification...');
@@ -201,6 +259,12 @@ export class TimeEntriesService {
       }
     }
 
+    // Calculate labor cost if rate exists
+    let laborCost: number | null = null;
+    if (activeEntry.hourlyRate) {
+      laborCost = this.calculateLaborCost(durationMinutes, Number(activeEntry.hourlyRate));
+    }
+
     return this.prisma.timeEntry.update({
       where: { id: activeEntry.id },
       data: {
@@ -208,10 +272,11 @@ export class TimeEntriesService {
         clockOutLocation: `${dto.latitude},${dto.longitude}`,
         clockOutPhotoUrl: photoUrl,
         durationMinutes,
+        laborCost: laborCost ? new Decimal(laborCost) : null,
       },
       include: {
         job: true,
-        user: { select: { id: true, name: true, phone: true } },
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
       },
     });
   }
@@ -287,7 +352,7 @@ export class TimeEntriesService {
     return this.prisma.timeEntry.findMany({
       where,
       include: {
-        user: { select: { id: true, name: true, phone: true } },
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
         job: true,
         approvedBy: { select: { id: true, name: true } },
       },
@@ -318,7 +383,7 @@ export class TimeEntriesService {
         clockOutTime: { not: null },
       },
       include: {
-        user: { select: { id: true, name: true, phone: true } },
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
         job: true,
       },
       orderBy: { clockInTime: 'desc' },
@@ -368,7 +433,7 @@ export class TimeEntriesService {
         rejectionReason: null,
       },
       include: {
-        user: { select: { id: true, name: true, phone: true } },
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
         job: true,
         approvedBy: { select: { id: true, name: true } },
       },
@@ -384,6 +449,7 @@ export class TimeEntriesService {
         workerName: entry.user?.name,
         workerId: entry.userId,
         durationMinutes: entry.durationMinutes,
+        laborCost: entry.laborCost ? Number(entry.laborCost) : null,
       },
     });
 
@@ -466,5 +532,73 @@ export class TimeEntriesService {
     }
 
     return results;
+  }
+
+  // ============ LABOR COST ANALYTICS ============
+
+  async getLaborCostSummary(companyId: string, startDate?: Date, endDate?: Date) {
+    const where: any = {
+      companyId,
+      approvalStatus: 'APPROVED',
+      laborCost: { not: null },
+    };
+
+    if (startDate || endDate) {
+      where.clockInTime = {};
+      if (startDate) where.clockInTime.gte = startDate;
+      if (endDate) where.clockInTime.lte = endDate;
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true } },
+        job: { select: { id: true, name: true } },
+      },
+    });
+
+    // Calculate totals
+    const totalCost = entries.reduce((sum, e) => sum + (e.laborCost ? Number(e.laborCost) : 0), 0);
+    const totalHours = entries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0) / 60;
+
+    // Group by worker
+    const byWorker = entries.reduce((acc, e) => {
+      const workerId = e.userId;
+      if (!acc[workerId]) {
+        acc[workerId] = {
+          id: workerId,
+          name: e.user?.name || 'Unknown',
+          totalCost: 0,
+          totalHours: 0,
+        };
+      }
+      acc[workerId].totalCost += e.laborCost ? Number(e.laborCost) : 0;
+      acc[workerId].totalHours += (e.durationMinutes || 0) / 60;
+      return acc;
+    }, {} as Record<string, any>);
+
+    // Group by job
+    const byJob = entries.reduce((acc, e) => {
+      const jobId = e.jobId || 'unassigned';
+      if (!acc[jobId]) {
+        acc[jobId] = {
+          id: jobId,
+          name: e.job?.name || 'Unassigned',
+          totalCost: 0,
+          totalHours: 0,
+        };
+      }
+      acc[jobId].totalCost += e.laborCost ? Number(e.laborCost) : 0;
+      acc[jobId].totalHours += (e.durationMinutes || 0) / 60;
+      return acc;
+    }, {} as Record<string, any>);
+
+    return {
+      totalCost: Math.round(totalCost * 100) / 100,
+      totalHours: Math.round(totalHours * 100) / 100,
+      entryCount: entries.length,
+      byWorker: Object.values(byWorker),
+      byJob: Object.values(byJob),
+    };
   }
 }
