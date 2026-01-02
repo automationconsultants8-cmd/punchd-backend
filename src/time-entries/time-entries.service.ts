@@ -7,6 +7,24 @@ import { AuditService } from '../audit/audit.service';
 import { ClockInDto, ClockOutDto } from './dto';
 import { Decimal } from '@prisma/client/runtime/library';
 
+interface OvertimeSettings {
+  dailyOtThreshold: number;   // Minutes (default 480 = 8 hours)
+  dailyDtThreshold: number;   // Minutes (default 720 = 12 hours)
+  weeklyOtThreshold: number;  // Minutes (default 2400 = 40 hours)
+  otMultiplier: number;       // Default 1.5
+  dtMultiplier: number;       // Default 2.0
+}
+
+interface OvertimeBreakdown {
+  regularMinutes: number;
+  overtimeMinutes: number;
+  doubleTimeMinutes: number;
+  regularPay: number;
+  overtimePay: number;
+  doubleTimePay: number;
+  totalPay: number;
+}
+
 @Injectable()
 export class TimeEntriesService {
   constructor(
@@ -17,9 +35,119 @@ export class TimeEntriesService {
     private auditService: AuditService,
   ) {}
 
+  // Get company's overtime settings
+  private async getOvertimeSettings(companyId: string): Promise<OvertimeSettings> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { overtimeSettings: true },
+    });
+
+    const defaults: OvertimeSettings = {
+      dailyOtThreshold: 480,    // 8 hours
+      dailyDtThreshold: 720,    // 12 hours
+      weeklyOtThreshold: 2400,  // 40 hours
+      otMultiplier: 1.5,
+      dtMultiplier: 2.0,
+    };
+
+    if (!company?.overtimeSettings) return defaults;
+
+    const settings = company.overtimeSettings as any;
+    return {
+      dailyOtThreshold: settings.dailyOtThreshold ?? defaults.dailyOtThreshold,
+      dailyDtThreshold: settings.dailyDtThreshold ?? defaults.dailyDtThreshold,
+      weeklyOtThreshold: settings.weeklyOtThreshold ?? defaults.weeklyOtThreshold,
+      otMultiplier: settings.otMultiplier ?? defaults.otMultiplier,
+      dtMultiplier: settings.dtMultiplier ?? defaults.dtMultiplier,
+    };
+  }
+
+  // Get hours worked this week before this entry
+  private async getWeeklyMinutesWorked(userId: string, companyId: string, beforeDate: Date): Promise<number> {
+    // Get start of week (Sunday)
+    const startOfWeek = new Date(beforeDate);
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where: {
+        userId,
+        companyId,
+        clockOutTime: { not: null },
+        clockInTime: {
+          gte: startOfWeek,
+          lt: beforeDate,
+        },
+      },
+      select: { durationMinutes: true, breakMinutes: true },
+    });
+
+    return entries.reduce((sum, e) => sum + ((e.durationMinutes || 0) - (e.breakMinutes || 0)), 0);
+  }
+
+  // Calculate overtime breakdown for a time entry
+  private calculateOvertimeBreakdown(
+    durationMinutes: number,
+    hourlyRate: number,
+    settings: OvertimeSettings,
+    weeklyMinutesBefore: number,
+  ): OvertimeBreakdown {
+    let regularMinutes = 0;
+    let overtimeMinutes = 0;
+    let doubleTimeMinutes = 0;
+
+    // Daily overtime calculation
+    if (durationMinutes <= settings.dailyOtThreshold) {
+      // All regular time
+      regularMinutes = durationMinutes;
+    } else if (durationMinutes <= settings.dailyDtThreshold) {
+      // Regular + overtime
+      regularMinutes = settings.dailyOtThreshold;
+      overtimeMinutes = durationMinutes - settings.dailyOtThreshold;
+    } else {
+      // Regular + overtime + double time
+      regularMinutes = settings.dailyOtThreshold;
+      overtimeMinutes = settings.dailyDtThreshold - settings.dailyOtThreshold;
+      doubleTimeMinutes = durationMinutes - settings.dailyDtThreshold;
+    }
+
+    // Weekly overtime check (convert regular to OT if over 40 hrs/week)
+    const totalWeeklyAfter = weeklyMinutesBefore + regularMinutes;
+    if (totalWeeklyAfter > settings.weeklyOtThreshold) {
+      const weeklyOtMinutes = Math.min(
+        regularMinutes,
+        totalWeeklyAfter - settings.weeklyOtThreshold
+      );
+      // Convert some regular to overtime
+      if (weeklyMinutesBefore < settings.weeklyOtThreshold) {
+        const regularBeforeWeeklyOt = settings.weeklyOtThreshold - weeklyMinutesBefore;
+        regularMinutes = regularBeforeWeeklyOt;
+        overtimeMinutes += (durationMinutes <= settings.dailyOtThreshold ? durationMinutes : settings.dailyOtThreshold) - regularBeforeWeeklyOt;
+      } else {
+        // Already over weekly threshold, all daily regular becomes OT
+        overtimeMinutes += regularMinutes;
+        regularMinutes = 0;
+      }
+    }
+
+    // Calculate pay
+    const regularPay = (regularMinutes / 60) * hourlyRate;
+    const overtimePay = (overtimeMinutes / 60) * hourlyRate * settings.otMultiplier;
+    const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * settings.dtMultiplier;
+
+    return {
+      regularMinutes,
+      overtimeMinutes,
+      doubleTimeMinutes,
+      regularPay: Math.round(regularPay * 100) / 100,
+      overtimePay: Math.round(overtimePay * 100) / 100,
+      doubleTimePay: Math.round(doubleTimePay * 100) / 100,
+      totalPay: Math.round((regularPay + overtimePay + doubleTimePay) * 100) / 100,
+    };
+  }
+
   // Get effective rate for a worker on a specific job
   private async getEffectiveRate(companyId: string, userId: string, jobId?: string): Promise<{ rate: number | null; isPrevailingWage: boolean }> {
-    // If job specified, check for job-specific rate first
     if (jobId) {
       const jobRate = await this.prisma.workerJobRate.findFirst({
         where: { companyId, userId, jobId },
@@ -32,7 +160,6 @@ export class TimeEntriesService {
         };
       }
 
-      // Check job default rate
       const job = await this.prisma.job.findFirst({
         where: { id: jobId, companyId },
         select: { defaultHourlyRate: true, isPrevailingWage: true },
@@ -46,7 +173,6 @@ export class TimeEntriesService {
       }
     }
 
-    // Fall back to worker default rate
     const user = await this.prisma.user.findFirst({
       where: { id: userId, companyId },
       select: { hourlyRate: true },
@@ -60,12 +186,6 @@ export class TimeEntriesService {
     }
 
     return { rate: null, isPrevailingWage: false };
-  }
-
-  // Calculate labor cost from duration and rate
-  private calculateLaborCost(durationMinutes: number, hourlyRate: number): number {
-    const hours = durationMinutes / 60;
-    return Math.round(hours * hourlyRate * 100) / 100; // Round to 2 decimal places
   }
 
   async clockIn(userId: string, companyId: string, dto: ClockInDto) {
@@ -147,7 +267,7 @@ export class TimeEntriesService {
       },
     });
 
-    // Face verification (if user has reference photo)
+    // Face verification logic
     if (user?.referencePhotoUrl && photoUrl !== 'placeholder.jpg') {
       try {
         console.log('🔍 Starting face verification...');
@@ -259,11 +379,22 @@ export class TimeEntriesService {
       }
     }
 
-    // Calculate labor cost if rate exists
-    let laborCost: number | null = null;
-    if (activeEntry.hourlyRate) {
-      laborCost = this.calculateLaborCost(durationMinutes, Number(activeEntry.hourlyRate));
-    }
+    // Calculate overtime
+    const hourlyRate = activeEntry.hourlyRate ? Number(activeEntry.hourlyRate) : 0;
+    const otSettings = await this.getOvertimeSettings(companyId);
+    const weeklyMinutesBefore = await this.getWeeklyMinutesWorked(userId, companyId, clockInTime);
+
+    const breakdown = hourlyRate > 0
+      ? this.calculateOvertimeBreakdown(durationMinutes, hourlyRate, otSettings, weeklyMinutesBefore)
+      : {
+          regularMinutes: durationMinutes,
+          overtimeMinutes: 0,
+          doubleTimeMinutes: 0,
+          regularPay: 0,
+          overtimePay: 0,
+          doubleTimePay: 0,
+          totalPay: 0,
+        };
 
     return this.prisma.timeEntry.update({
       where: { id: activeEntry.id },
@@ -272,7 +403,13 @@ export class TimeEntriesService {
         clockOutLocation: `${dto.latitude},${dto.longitude}`,
         clockOutPhotoUrl: photoUrl,
         durationMinutes,
-        laborCost: laborCost ? new Decimal(laborCost) : null,
+        regularMinutes: breakdown.regularMinutes,
+        overtimeMinutes: breakdown.overtimeMinutes,
+        doubleTimeMinutes: breakdown.doubleTimeMinutes,
+        regularPay: new Decimal(breakdown.regularPay),
+        overtimePay: new Decimal(breakdown.overtimePay),
+        doubleTimePay: new Decimal(breakdown.doubleTimePay),
+        laborCost: new Decimal(breakdown.totalPay),
       },
       include: {
         job: true,
@@ -534,13 +671,12 @@ export class TimeEntriesService {
     return results;
   }
 
-  // ============ LABOR COST ANALYTICS ============
+  // ============ OVERTIME ANALYTICS ============
 
-  async getLaborCostSummary(companyId: string, startDate?: Date, endDate?: Date) {
+  async getOvertimeSummary(companyId: string, startDate?: Date, endDate?: Date) {
     const where: any = {
       companyId,
-      approvalStatus: 'APPROVED',
-      laborCost: { not: null },
+      clockOutTime: { not: null },
     };
 
     if (startDate || endDate) {
@@ -557,9 +693,25 @@ export class TimeEntriesService {
       },
     });
 
-    // Calculate totals
-    const totalCost = entries.reduce((sum, e) => sum + (e.laborCost ? Number(e.laborCost) : 0), 0);
-    const totalHours = entries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0) / 60;
+    const totals = {
+      regularMinutes: 0,
+      overtimeMinutes: 0,
+      doubleTimeMinutes: 0,
+      regularPay: 0,
+      overtimePay: 0,
+      doubleTimePay: 0,
+      totalPay: 0,
+    };
+
+    entries.forEach(e => {
+      totals.regularMinutes += e.regularMinutes || 0;
+      totals.overtimeMinutes += e.overtimeMinutes || 0;
+      totals.doubleTimeMinutes += e.doubleTimeMinutes || 0;
+      totals.regularPay += e.regularPay ? Number(e.regularPay) : 0;
+      totals.overtimePay += e.overtimePay ? Number(e.overtimePay) : 0;
+      totals.doubleTimePay += e.doubleTimePay ? Number(e.doubleTimePay) : 0;
+      totals.totalPay += e.laborCost ? Number(e.laborCost) : 0;
+    });
 
     // Group by worker
     const byWorker = entries.reduce((acc, e) => {
@@ -568,37 +720,31 @@ export class TimeEntriesService {
         acc[workerId] = {
           id: workerId,
           name: e.user?.name || 'Unknown',
-          totalCost: 0,
-          totalHours: 0,
+          regularMinutes: 0,
+          overtimeMinutes: 0,
+          doubleTimeMinutes: 0,
+          totalPay: 0,
         };
       }
-      acc[workerId].totalCost += e.laborCost ? Number(e.laborCost) : 0;
-      acc[workerId].totalHours += (e.durationMinutes || 0) / 60;
-      return acc;
-    }, {} as Record<string, any>);
-
-    // Group by job
-    const byJob = entries.reduce((acc, e) => {
-      const jobId = e.jobId || 'unassigned';
-      if (!acc[jobId]) {
-        acc[jobId] = {
-          id: jobId,
-          name: e.job?.name || 'Unassigned',
-          totalCost: 0,
-          totalHours: 0,
-        };
-      }
-      acc[jobId].totalCost += e.laborCost ? Number(e.laborCost) : 0;
-      acc[jobId].totalHours += (e.durationMinutes || 0) / 60;
+      acc[workerId].regularMinutes += e.regularMinutes || 0;
+      acc[workerId].overtimeMinutes += e.overtimeMinutes || 0;
+      acc[workerId].doubleTimeMinutes += e.doubleTimeMinutes || 0;
+      acc[workerId].totalPay += e.laborCost ? Number(e.laborCost) : 0;
       return acc;
     }, {} as Record<string, any>);
 
     return {
-      totalCost: Math.round(totalCost * 100) / 100,
-      totalHours: Math.round(totalHours * 100) / 100,
-      entryCount: entries.length,
+      totals: {
+        regularHours: Math.round(totals.regularMinutes / 60 * 100) / 100,
+        overtimeHours: Math.round(totals.overtimeMinutes / 60 * 100) / 100,
+        doubleTimeHours: Math.round(totals.doubleTimeMinutes / 60 * 100) / 100,
+        regularPay: Math.round(totals.regularPay * 100) / 100,
+        overtimePay: Math.round(totals.overtimePay * 100) / 100,
+        doubleTimePay: Math.round(totals.doubleTimePay * 100) / 100,
+        totalPay: Math.round(totals.totalPay * 100) / 100,
+      },
       byWorker: Object.values(byWorker),
-      byJob: Object.values(byJob),
+      entryCount: entries.length,
     };
   }
 }
