@@ -67,6 +67,7 @@ model User {
   faceVerificationLogs FaceVerificationLog[]
   shifts              Shift[]
   passwordResetTokens PasswordResetToken[]
+  approvedTimeEntries TimeEntry[] @relation("ApprovedTimeEntries")
 
   @@unique([companyId, phone])
   @@index([companyId, email])
@@ -132,15 +133,23 @@ model TimeEntry {
   breakMinutes      Int       @default(0)
   isOnBreak         Boolean   @default(false)
 
+  // Approval workflow fields
+  approvalStatus    ApprovalStatus @default(PENDING)
+  approvedById      String?
+  approvedAt        DateTime?
+  rejectionReason   String?
+
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   company           Company?  @relation(fields: [companyId], references: [id])
   user              User      @relation(fields: [userId], references: [id])
   job               Job?      @relation(fields: [jobId], references: [id])
+  approvedBy        User?     @relation("ApprovedTimeEntries", fields: [approvedById], references: [id])
   violations        Violation[]
   faceVerificationLogs FaceVerificationLog[]
 
+  @@index([companyId, approvalStatus])
   @@map("time_entries")
 }
 
@@ -245,6 +254,7 @@ model Shift {
   @@index([jobId, shiftDate])
   @@map("shifts")
 }
+
 enum AuditAction {
   USER_CREATED
   USER_UPDATED
@@ -262,16 +272,18 @@ enum AuditAction {
   COMPANY_SETTINGS_UPDATED
   LOGIN
   PASSWORD_RESET
+  TIME_ENTRY_APPROVED
+  TIME_ENTRY_REJECTED
 }
 
 model AuditLog {
   id          String      @id @default(uuid())
   companyId   String
-  userId      String?     // Who performed the action
+  userId      String?
   action      AuditAction
-  targetType  String?     // e.g., "USER", "JOB", "SHIFT"
-  targetId    String?     // ID of the affected record
-  details     Json        @default("{}")  // Additional context
+  targetType  String?
+  targetId    String?
+  details     Json        @default("{}")
   ipAddress   String?
   createdAt   DateTime    @default(now())
 
