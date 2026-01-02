@@ -14,7 +14,7 @@ export const FEATURE_FLAGS = {
   SHIFT_SCHEDULING: ['professional', 'premium', 'enterprise', 'trial'],
   
   // Enterprise features
-  AUDIT_LOGS: ['enterprise', 'trial'],
+  AUDIT_LOGS: ['professional', 'premium', 'enterprise', 'trial'],
   API_ACCESS: ['enterprise'],
   SSO: ['enterprise'],
 };
