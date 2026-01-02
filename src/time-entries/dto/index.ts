@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsNumber, IsOptional, IsEnum, IsObject, Min, Max } from 'class-validator';
-
+export * from './approve-time-entry.dto';
 export enum EntryType {
   JOB_TIME = 'JOB_TIME',
   TRAVEL_TIME = 'TRAVEL_TIME',
