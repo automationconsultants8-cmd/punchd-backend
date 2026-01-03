@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import { ClockInDto, ClockOutDto, ManualTimeEntryDto } from './dto';
 import { Decimal } from '@prisma/client/runtime/library';
 import * as ExcelJS from 'exceljs';
+import { BreakComplianceService } from '../break-compliance/break-compliance.service';
 
 interface OvertimeSettings {
   dailyOtThreshold: number;
