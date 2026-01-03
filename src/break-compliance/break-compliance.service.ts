@@ -2,8 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { Decimal } from '@prisma/client/runtime/library';
+import { BreakViolation } from '@prisma/client';
 
-interface BreakComplianceSettings {
+export interface BreakComplianceSettings {
   enabled: boolean;
   state: string;
   mealBreakThreshold: number;
@@ -96,8 +97,6 @@ export class BreakComplianceService {
 
     // Check second meal break (10+ hours worked in CA)
     if (durationMinutes >= settings.secondMealThreshold) {
-      // For second meal, we'd need to track multiple breaks
-      // For now, check if total break time covers two meal breaks
       const requiredTotalMealTime = settings.mealBreakDuration * 2;
       if (mealBreakMinutes < requiredTotalMealTime) {
         violations.push({
@@ -129,7 +128,7 @@ export class BreakComplianceService {
       isCompliant: violations.length === 0,
       violations,
       totalPenaltyHours,
-      totalPenaltyAmount: 0, // Will be calculated with hourly rate
+      totalPenaltyAmount: 0,
     };
   }
 
@@ -139,8 +138,8 @@ export class BreakComplianceService {
     timeEntryId: string,
     violations: BreakViolationData[],
     hourlyRate: number | null,
-  ) {
-    const createdViolations = [];
+  ): Promise<BreakViolation[]> {
+    const createdViolations: BreakViolation[] = [];
 
     for (const violation of violations) {
       const penaltyAmount = hourlyRate ? violation.penaltyHours * hourlyRate : null;
@@ -221,18 +220,15 @@ export class BreakComplianceService {
       }),
     ]);
 
-    // Calculate penalty totals
     const totalPenalty = violations
       .filter(v => !v.waived)
       .reduce((sum, v) => sum + (v.penaltyAmount ? Number(v.penaltyAmount) : 0), 0);
 
-    // Count by type
     const byType = violations.reduce((acc, v) => {
       acc[v.violationType] = (acc[v.violationType] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
-    // Get affected workers count
     const affectedWorkers = await this.prisma.breakViolation.groupBy({
       by: ['userId'],
       where,
@@ -271,7 +267,7 @@ export class BreakComplianceService {
     await this.auditService.log({
       companyId,
       userId: waivedBy,
-      action: 'BREAK_VIOLATION_WAIVED',
+      action: 'BREAK_VIOLATION_WAIVED' as any,
       targetType: 'BREAK_VIOLATION',
       targetId: violationId,
       details: {
@@ -284,7 +280,7 @@ export class BreakComplianceService {
     return updated;
   }
 
-  async updateCompanySettings(companyId: string, settings: Partial<BreakComplianceSettings>, updatedBy: string) {
+  async updateCompanySettings(companyId: string, settings: Partial<BreakComplianceSettings>, updatedBy: string): Promise<BreakComplianceSettings> {
     const current = await this.getComplianceSettings(companyId);
     const newSettings = { ...current, ...settings };
 
