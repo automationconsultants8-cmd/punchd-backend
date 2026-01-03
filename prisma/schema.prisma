@@ -19,6 +19,7 @@ model Company {
   trialEndsAt           DateTime?
   settings              Json     @default("{}")
   overtimeSettings      Json     @default("{\"dailyOtThreshold\": 480, \"dailyDtThreshold\": 720, \"weeklyOtThreshold\": 2400, \"otMultiplier\": 1.5, \"dtMultiplier\": 2.0}")
+  breakComplianceSettings Json   @default("{\"enabled\": true, \"state\": \"CA\", \"mealBreakThreshold\": 300, \"mealBreakDuration\": 30, \"secondMealThreshold\": 600, \"restBreakInterval\": 240, \"restBreakDuration\": 10, \"penaltyRate\": 1.0}")
   isActive              Boolean  @default(true)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -31,6 +32,7 @@ model Company {
   shifts                Shift[]
   auditLogs             AuditLog[]
   workerJobRates        WorkerJobRate[]
+  breakViolations       BreakViolation[]
 
   @@map("companies")
 }
@@ -72,6 +74,7 @@ model User {
   passwordResetTokens PasswordResetToken[]
   approvedTimeEntries TimeEntry[] @relation("ApprovedTimeEntries")
   jobRates            WorkerJobRate[]
+  breakViolations     BreakViolation[]
 
   @@unique([companyId, phone])
   @@index([companyId, email])
@@ -181,6 +184,12 @@ model TimeEntry {
   overtimePay       Decimal?  @db.Decimal(10, 2)
   doubleTimePay     Decimal?  @db.Decimal(10, 2)
 
+  // Break compliance
+  mealBreaksTaken   Int       @default(0)
+  restBreaksTaken   Int       @default(0)
+  breakCompliant    Boolean   @default(true)
+  breakPenaltyPay   Decimal?  @db.Decimal(10, 2)
+
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -190,10 +199,46 @@ model TimeEntry {
   approvedBy        User?     @relation("ApprovedTimeEntries", fields: [approvedById], references: [id])
   violations        Violation[]
   faceVerificationLogs FaceVerificationLog[]
+  breakViolations   BreakViolation[]
 
   @@index([companyId, approvalStatus])
   @@index([userId, clockInTime])
   @@map("time_entries")
+}
+
+enum BreakViolationType {
+  MISSED_MEAL_BREAK
+  SHORT_MEAL_BREAK
+  LATE_MEAL_BREAK
+  MISSED_REST_BREAK
+  MISSED_SECOND_MEAL
+}
+
+model BreakViolation {
+  id              String              @id @default(uuid())
+  companyId       String
+  userId          String
+  timeEntryId     String
+  violationType   BreakViolationType
+  description     String
+  requiredMinutes Int
+  actualMinutes   Int
+  penaltyHours    Decimal             @db.Decimal(4, 2)
+  penaltyAmount   Decimal?            @db.Decimal(10, 2)
+  waived          Boolean             @default(false)
+  waivedBy        String?
+  waivedAt        DateTime?
+  waivedReason    String?
+  createdAt       DateTime            @default(now())
+
+  company         Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timeEntry       TimeEntry           @relation(fields: [timeEntryId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([userId, createdAt])
+  @@index([timeEntryId])
+  @@map("break_violations")
 }
 
 enum ViolationType {
@@ -319,6 +364,7 @@ enum AuditAction {
   TIME_ENTRY_REJECTED
   PAY_RATE_UPDATED
   OVERTIME_SETTINGS_UPDATED
+  BREAK_VIOLATION_WAIVED
 }
 
 model AuditLog {
