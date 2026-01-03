@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
-import { BreakComplianceService } from './break-compliance.service';
+import { BreakComplianceService, BreakComplianceSettings } from './break-compliance.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Break Compliance')
@@ -12,13 +12,13 @@ export class BreakComplianceController {
 
   @Get('settings')
   @ApiOperation({ summary: 'Get company break compliance settings' })
-  getSettings(@Request() req) {
+  getSettings(@Request() req): Promise<BreakComplianceSettings> {
     return this.breakComplianceService.getComplianceSettings(req.user.companyId);
   }
 
   @Patch('settings')
   @ApiOperation({ summary: 'Update company break compliance settings' })
-  updateSettings(@Request() req, @Body() settings: any) {
+  updateSettings(@Request() req, @Body() settings: any): Promise<BreakComplianceSettings> {
     return this.breakComplianceService.updateCompanySettings(req.user.companyId, settings, req.user.userId);
   }
 
