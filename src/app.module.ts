@@ -27,6 +27,7 @@ import { BreakComplianceModule } from './break-compliance/break-compliance.modul
     AuthModule,
     UsersModule,
     JobsModule,
+    BreakComplianceModule,
     TimeEntriesModule,
     ViolationsModule,
     FaceRecognitionModule,
