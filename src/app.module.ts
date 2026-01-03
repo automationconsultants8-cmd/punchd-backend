@@ -13,6 +13,7 @@ import { ShiftsModule } from './shifts/shifts.module';
 import { AuditModule } from './audit/audit.module';
 import { StripeModule } from './stripe/stripe.module';
 import { FeaturesModule } from './features/features.module';
+import { BreakComplianceModule } from './break-compliance/break-compliance.module';
 
 @Module({
   imports: [
