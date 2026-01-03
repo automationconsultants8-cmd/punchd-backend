@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { AwsModule } from '../aws/aws.module';
 import { EmailModule } from '../email/email.module';
+import { BreakComplianceModule } from '../break-compliance/break-compliance.module';
 
 @Module({
   imports: [PrismaModule, JobsModule, AwsModule, EmailModule],
