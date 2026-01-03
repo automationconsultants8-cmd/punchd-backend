@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
+import { Response } from 'express';
 import { TimeEntriesService } from './time-entries.service';
-import { ClockInDto, ClockOutDto } from './dto';
+import { ClockInDto, ClockOutDto, ManualTimeEntryDto } from './dto';
 import { ApproveTimeEntryDto, BulkApproveDto, BulkRejectDto } from './dto/approve-time-entry.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -22,6 +23,12 @@ export class TimeEntriesController {
   @ApiOperation({ summary: 'Clock out from current entry' })
   clockOut(@Request() req, @Body() dto: ClockOutDto) {
     return this.timeEntriesService.clockOut(req.user.userId, req.user.companyId, dto);
+  }
+
+  @Post('manual')
+  @ApiOperation({ summary: 'Create a manual time entry' })
+  createManualEntry(@Request() req, @Body() dto: ManualTimeEntryDto) {
+    return this.timeEntriesService.createManualEntry(req.user.companyId, dto, req.user.userId);
   }
 
   @Get('status')
@@ -74,6 +81,29 @@ export class TimeEntriesController {
       startDate ? new Date(startDate) : undefined,
       endDate ? new Date(endDate) : undefined,
     );
+  }
+
+  @Get('export/excel')
+  @ApiOperation({ summary: 'Export time entries to Excel' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  async exportExcel(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const buffer = await this.timeEntriesService.exportToExcel(
+      req.user.companyId,
+      startDate ? new Date(startDate) : undefined,
+      endDate ? new Date(endDate) : undefined,
+    );
+
+    const filename = `timesheet-${startDate || 'all'}-to-${endDate || 'now'}.xlsx`;
+    
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   }
 
   @Get()
