@@ -104,6 +104,36 @@ export class TimeEntriesController {
     res.send(pdfBuffer);
   }
 
+  @Get('export/quickbooks')
+  @ApiOperation({ summary: 'Export time entries to QuickBooks format' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'format', required: false, enum: ['iif', 'csv'], description: 'Export format (default: csv)' })
+  async exportQuickBooks(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('format') format?: 'iif' | 'csv',
+  ) {
+    const result = await this.timeEntriesService.exportToQuickBooks(req.user.companyId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      format: format || 'csv',
+    });
+
+    const extension = format === 'iif' ? 'iif' : 'csv';
+    const contentType = format === 'iif' ? 'application/x-iif' : 'text/csv';
+
+    res.set({
+      'Content-Type': contentType,
+      'Content-Disposition': `attachment; filename=quickbooks-timesheet-${startDate || 'all'}-to-${endDate || 'present'}.${extension}`,
+      'Content-Length': Buffer.byteLength(result),
+    });
+
+    res.send(result);
+  }
+
   @Get('overtime-summary')
   @ApiOperation({ summary: 'Get overtime summary for date range' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
@@ -145,8 +175,6 @@ export class TimeEntriesController {
       approvalStatus,
     });
   }
-
-  // ============ APPROVAL ENDPOINTS ============
 
   @Get('pending')
   @ApiOperation({ summary: 'Get all pending time entries for approval' })
