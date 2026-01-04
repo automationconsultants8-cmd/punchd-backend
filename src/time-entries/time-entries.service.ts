@@ -206,7 +206,6 @@ export class TimeEntriesService {
       }
     }
 
-    // Calculate overtime and labor cost
     const overtimeCalc = await this.calculateOvertimeForEntry(
       userId,
       companyId,
@@ -242,36 +241,34 @@ export class TimeEntriesService {
     clockInTime: Date,
     workMinutes: number,
   ) {
-    // Get effective rate
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { hourlyRate: true },
     });
 
-    let effectiveRate: number | null = null;
+    let hourlyRate: number | null = null;
 
     if (jobId) {
       const jobRate = await this.prisma.workerJobRate.findFirst({
         where: { userId, jobId },
       });
       if (jobRate) {
-        effectiveRate = Number(jobRate.hourlyRate);
+        hourlyRate = Number(jobRate.hourlyRate);
       } else {
         const job = await this.prisma.job.findUnique({
           where: { id: jobId },
           select: { defaultHourlyRate: true },
         });
         if (job?.defaultHourlyRate) {
-          effectiveRate = Number(job.defaultHourlyRate);
+          hourlyRate = Number(job.defaultHourlyRate);
         }
       }
     }
 
-    if (!effectiveRate && user?.hourlyRate) {
-      effectiveRate = Number(user.hourlyRate);
+    if (!hourlyRate && user?.hourlyRate) {
+      hourlyRate = Number(user.hourlyRate);
     }
 
-    // Get all entries for this day to calculate daily overtime
     const dayStart = new Date(clockInTime);
     dayStart.setHours(0, 0, 0, 0);
     const dayEnd = new Date(clockInTime);
@@ -290,16 +287,14 @@ export class TimeEntriesService {
     const previousDailyMinutes = dailyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
     const totalDailyMinutes = previousDailyMinutes + workMinutes;
 
-    // Calculate daily overtime (CA rules: >8hrs = 1.5x, >12hrs = 2x)
     let regularMinutes = workMinutes;
     let overtimeMinutes = 0;
     let doubleTimeMinutes = 0;
 
-    const dailyRegularLimit = 8 * 60; // 480 minutes
-    const dailyOvertimeLimit = 12 * 60; // 720 minutes
+    const dailyRegularLimit = 8 * 60;
+    const dailyOvertimeLimit = 12 * 60;
 
     if (totalDailyMinutes > dailyOvertimeLimit) {
-      // Some double time
       const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
       doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
       
@@ -313,7 +308,6 @@ export class TimeEntriesService {
         overtimeMinutes = remainingWork;
       }
     } else if (totalDailyMinutes > dailyRegularLimit) {
-      // Some overtime, no double time
       if (previousDailyMinutes >= dailyRegularLimit) {
         overtimeMinutes = workMinutes;
         regularMinutes = 0;
@@ -323,12 +317,11 @@ export class TimeEntriesService {
       }
     }
 
-    // Calculate labor cost
     let laborCost: number | null = null;
-    if (effectiveRate) {
-      const regularPay = (regularMinutes / 60) * effectiveRate;
-      const overtimePay = (overtimeMinutes / 60) * effectiveRate * 1.5;
-      const doubleTimePay = (doubleTimeMinutes / 60) * effectiveRate * 2;
+    if (hourlyRate) {
+      const regularPay = (regularMinutes / 60) * hourlyRate;
+      const overtimePay = (overtimeMinutes / 60) * hourlyRate * 1.5;
+      const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * 2;
       laborCost = regularPay + overtimePay + doubleTimePay;
     }
 
@@ -336,7 +329,7 @@ export class TimeEntriesService {
       regularMinutes,
       overtimeMinutes,
       doubleTimeMinutes,
-      effectiveRate,
+      hourlyRate,
       laborCost,
     };
   }
@@ -439,8 +432,6 @@ export class TimeEntriesService {
       activeEntry: activeEntry || null,
     };
   }
-
-  // ============ APPROVAL WORKFLOW METHODS ============
 
   async getPendingApprovals(companyId: string) {
     return this.prisma.timeEntry.findMany({
@@ -683,8 +674,6 @@ export class TimeEntriesService {
     return entry;
   }
 
-  // ============ OVERTIME SUMMARY ============
-
   async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
     const where: any = { companyId, clockOutTime: { not: null } };
 
@@ -759,9 +748,7 @@ export class TimeEntriesService {
     };
   }
 
-  // ============ EXPORT METHODS ============
-
-  async exportToExcel(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }) {
+  async exportToExcel(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }): Promise<Buffer> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
     });
@@ -797,7 +784,6 @@ export class TimeEntriesService {
 
     const sheet = workbook.addWorksheet('Timesheet');
 
-    // Header
     sheet.mergeCells('A1:L1');
     sheet.getCell('A1').value = company?.name || 'Company Timesheet';
     sheet.getCell('A1').font = { size: 18, bold: true };
@@ -811,7 +797,6 @@ export class TimeEntriesService {
       : 'Present';
     sheet.getCell('A2').value = `Period: ${startStr} - ${endStr}`;
 
-    // Column headers
     const headers = ['Worker', 'Date', 'Job Site', 'Clock In', 'Clock Out', 'Break', 'Regular', 'OT', 'DT', 'Total', 'Rate', 'Amount', 'Status'];
     sheet.addRow([]);
     const headerRow = sheet.addRow(headers);
@@ -821,7 +806,6 @@ export class TimeEntriesService {
       cell.border = { bottom: { style: 'thin' } };
     });
 
-    // Data rows
     for (const entry of entries) {
       sheet.addRow([
         entry.user?.name || 'Unknown',
@@ -840,7 +824,6 @@ export class TimeEntriesService {
       ]);
     }
 
-    // Auto-width columns
     sheet.columns.forEach((column) => {
       column.width = 15;
     });
@@ -849,7 +832,7 @@ export class TimeEntriesService {
     return Buffer.from(buffer);
   }
 
-  async exportToPdf(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }) {
+  async exportToPdf(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }): Promise<Buffer> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
     });
@@ -895,7 +878,6 @@ export class TimeEntriesService {
       ? new Date(filters.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       : 'Present';
 
-    // Header
     doc.fontSize(20).font('Helvetica-Bold').text(company?.name || 'Company Timesheet', 40, 40);
 
     if (company?.address) {
@@ -909,7 +891,6 @@ export class TimeEntriesService {
     doc.fontSize(10).font('Helvetica').text(`Period: ${startStr} - ${endStr}`, 40, 110);
     doc.text(`Generated: ${new Date().toLocaleString('en-US')}`, 40, 124);
 
-    // Group by worker
     const workerGroups: Record<string, typeof entries> = {};
     for (const entry of entries) {
       const workerId = entry.userId;
@@ -950,7 +931,6 @@ export class TimeEntriesService {
         yPos = 40;
       }
 
-      // Worker header
       doc.font('Helvetica-Bold').fontSize(11).fillColor('#333333');
       doc.text(`${worker?.name || 'Unknown Worker'}`, 40, yPos);
       doc.font('Helvetica').fontSize(9).fillColor('#666666');
@@ -1022,7 +1002,6 @@ export class TimeEntriesService {
         rowIndex++;
       }
 
-      // Worker totals
       doc.rect(40, yPos, 712, 20).fill('#d4d4d4').stroke('#999999');
       doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
       doc.text('TOTAL', 45, yPos + 6);
@@ -1033,7 +1012,6 @@ export class TimeEntriesService {
       doc.text(`$${workerTotalPay.toFixed(2)}`, 545, yPos + 6, { width: 55 });
       yPos += 28;
 
-      // Signature lines
       if (yPos < pageHeight - marginBottom - 40) {
         doc.font('Helvetica').fontSize(8).fillColor('#666666');
         doc.text('Worker Signature: _______________________________', 45, yPos);
@@ -1043,7 +1021,6 @@ export class TimeEntriesService {
       }
     }
 
-    // Grand totals
     if (Object.keys(workerGroups).length > 0) {
       if (yPos > pageHeight - marginBottom - 50) {
         doc.addPage();
