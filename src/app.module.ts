@@ -15,6 +15,8 @@ import { StripeModule } from './stripe/stripe.module';
 import { FeaturesModule } from './features/features.module';
 import { BreakComplianceModule } from './break-compliance/break-compliance.module';
 import { CertifiedPayrollModule } from './certified-payroll/certified-payroll.module';
+import { CompanyModule } from './company/company.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -36,6 +38,7 @@ import { CertifiedPayrollModule } from './certified-payroll/certified-payroll.mo
     ShiftsModule,
     StripeModule,
     CertifiedPayrollModule,
+    CompanyModule,
   ],
 })
 export class AppModule {}
