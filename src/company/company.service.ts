@@ -29,7 +29,6 @@ export class CompanyService {
         city: dto.city ?? company.city,
         state: dto.state ?? company.state,
         zip: dto.zip ?? company.zip,
-        timezone: dto.timezone ?? company.timezone,
       },
     });
   }
