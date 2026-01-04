@@ -11,6 +11,10 @@ datasource db {
 model Company {
   id                    String   @id @default(uuid())
   name                  String
+  address               String?
+  city                  String?
+  state                 String?
+  zip                   String?
   inviteCode            String   @unique @default(uuid())
   subscriptionTier      String   @default("basic")
   subscriptionStatus    String   @default("active")
@@ -33,6 +37,7 @@ model Company {
   auditLogs             AuditLog[]
   workerJobRates        WorkerJobRate[]
   breakViolations       BreakViolation[]
+  certifiedPayrolls     CertifiedPayroll[]
 
   @@map("companies")
 }
@@ -63,6 +68,15 @@ model User {
   approvalStatus      ApprovalStatus @default(APPROVED)
   passwordHash        String?
   hourlyRate          Decimal?       @db.Decimal(10, 2)
+  
+  // WH-347 Required Fields
+  address             String?
+  city                String?
+  state               String?
+  zip                 String?
+  lastFourSSN         String?
+  tradeClassification String?
+  
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
@@ -125,6 +139,12 @@ model Job {
   isActive              Boolean   @default(true)
   defaultHourlyRate     Decimal?  @db.Decimal(10, 2)
   isPrevailingWage      Boolean   @default(false)
+  
+  // WH-347 Fields
+  projectNumber         String?
+  contractNumber        String?
+  wageDecisionNumber    String?
+  
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
@@ -132,6 +152,7 @@ model Job {
   timeEntries           TimeEntry[]
   shifts                Shift[]
   workerJobRates        WorkerJobRate[]
+  certifiedPayrolls     CertifiedPayroll[]
 
   @@index([companyId, isActive])
   @@map("jobs")
@@ -204,6 +225,28 @@ model TimeEntry {
   @@index([companyId, approvalStatus])
   @@index([userId, clockInTime])
   @@map("time_entries")
+}
+
+model CertifiedPayroll {
+  id              String    @id @default(uuid())
+  companyId       String
+  jobId           String
+  weekEndingDate  DateTime  @db.Date
+  payrollNumber   Int
+  reportData      Json
+  pdfUrl          String?
+  status          String    @default("DRAFT")
+  submittedAt     DateTime?
+  submittedBy     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  job             Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, jobId, weekEndingDate])
+  @@index([companyId, weekEndingDate])
+  @@map("certified_payrolls")
 }
 
 enum BreakViolationType {
@@ -365,6 +408,8 @@ enum AuditAction {
   PAY_RATE_UPDATED
   OVERTIME_SETTINGS_UPDATED
   BREAK_VIOLATION_WAIVED
+  CERTIFIED_PAYROLL_GENERATED
+  CERTIFIED_PAYROLL_SUBMITTED
 }
 
 model AuditLog {
