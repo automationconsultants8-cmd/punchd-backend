@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, Request, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { Response } from 'express';
-import { CertifiedPayrollService } from './certified-payroll.service';
+import { CertifiedPayrollService, PayrollPreviewData } from './certified-payroll.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Certified Payroll')
@@ -25,7 +25,7 @@ export class CertifiedPayrollController {
     @Request() req,
     @Query('jobId') jobId: string,
     @Query('weekEndingDate') weekEndingDate: string,
-  ) {
+  ): Promise<PayrollPreviewData> {
     return this.certifiedPayrollService.generatePayrollData(
       req.user.companyId,
       jobId,
