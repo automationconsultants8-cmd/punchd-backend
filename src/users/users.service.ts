@@ -14,7 +14,6 @@ export class UsersService {
   ) {}
 
   async create(companyId: string, dto: CreateUserDto, performedBy?: string) {
-    // Format phone number
     let formattedPhone = dto.phone.trim();
     if (!formattedPhone.startsWith('+')) {
       formattedPhone = '+1' + formattedPhone.replace(/\D/g, '');
@@ -52,11 +51,16 @@ export class UsersService {
         role: (dto.role as any) || 'WORKER',
         referencePhotoUrl: referencePhotoUrl || undefined,
         hourlyRate: dto.hourlyRate ? new Decimal(dto.hourlyRate) : null,
+        address: dto.address || null,
+        city: dto.city || null,
+        state: dto.state || null,
+        zip: dto.zip || null,
+        lastFourSSN: dto.lastFourSSN || null,
+        tradeClassification: dto.tradeClassification || null,
       },
       include: { company: true },
     });
 
-    // Audit log
     await this.auditService.log({
       companyId,
       userId: performedBy,
@@ -72,13 +76,13 @@ export class UsersService {
   async findAll(companyId: string) {
     return this.prisma.user.findMany({
       where: { companyId },
-      include: { 
+      include: {
         company: { select: { id: true, name: true } },
         jobRates: {
           include: {
-            job: { select: { id: true, name: true } }
-          }
-        }
+            job: { select: { id: true, name: true } },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -87,13 +91,13 @@ export class UsersService {
   async findOne(companyId: string, userId: string) {
     const user = await this.prisma.user.findFirst({
       where: { id: userId, companyId },
-      include: { 
+      include: {
         company: true,
         jobRates: {
           include: {
-            job: { select: { id: true, name: true } }
-          }
-        }
+            job: { select: { id: true, name: true } },
+          },
+        },
       },
     });
 
@@ -108,7 +112,6 @@ export class UsersService {
     const user = await this.findOne(companyId, userId);
     const changes: string[] = [];
 
-    // Handle phone number update
     let formattedPhone: string | undefined = undefined;
     if (dto.phone) {
       formattedPhone = dto.phone.trim();
@@ -130,7 +133,7 @@ export class UsersService {
         }
 
         changes.push(`phone: ${user.phone} → ${formattedPhone}`);
-        
+
         await this.auditService.log({
           companyId,
           userId: performedBy,
@@ -142,10 +145,9 @@ export class UsersService {
       }
     }
 
-    // Track role changes
     if (dto.role && dto.role !== user.role) {
       changes.push(`role: ${user.role} → ${dto.role}`);
-      
+
       await this.auditService.log({
         companyId,
         userId: performedBy,
@@ -156,26 +158,24 @@ export class UsersService {
       });
     }
 
-    // Track hourly rate changes
     const currentRate = user.hourlyRate ? Number(user.hourlyRate) : null;
     if (dto.hourlyRate !== undefined && dto.hourlyRate !== currentRate) {
       changes.push(`hourlyRate: $${currentRate || 0} → $${dto.hourlyRate}`);
-      
+
       await this.auditService.log({
         companyId,
         userId: performedBy,
         action: 'PAY_RATE_UPDATED',
         targetType: 'USER',
         targetId: userId,
-        details: { 
+        details: {
           userName: user.name,
-          oldRate: currentRate, 
-          newRate: dto.hourlyRate 
+          oldRate: currentRate,
+          newRate: dto.hourlyRate,
         },
       });
     }
 
-    // Track approval status changes
     if (dto.approvalStatus && dto.approvalStatus !== user.approvalStatus) {
       if (dto.approvalStatus === 'APPROVED') {
         await this.auditService.log({
@@ -198,7 +198,6 @@ export class UsersService {
       }
     }
 
-    // Track deactivation
     if (dto.isActive === false && user.isActive === true) {
       await this.auditService.log({
         companyId,
@@ -210,7 +209,6 @@ export class UsersService {
       });
     }
 
-    // Handle reference photo upload
     let referencePhotoUrl: string | undefined = undefined;
     if (dto.referencePhoto) {
       try {
@@ -225,25 +223,26 @@ export class UsersService {
       }
     }
 
-    const updateData: any = {
-      name: dto.name,
-      email: dto.email,
-      role: dto.role as any,
-      isActive: dto.isActive,
-      approvalStatus: dto.approvalStatus,
-    };
+    const updateData: any = {};
 
-    if (formattedPhone) {
-      updateData.phone = formattedPhone;
-    }
-
-    if (referencePhotoUrl) {
-      updateData.referencePhotoUrl = referencePhotoUrl;
-    }
-
+    if (dto.name !== undefined) updateData.name = dto.name;
+    if (dto.email !== undefined) updateData.email = dto.email;
+    if (dto.role !== undefined) updateData.role = dto.role as any;
+    if (dto.isActive !== undefined) updateData.isActive = dto.isActive;
+    if (dto.approvalStatus !== undefined) updateData.approvalStatus = dto.approvalStatus;
+    if (formattedPhone) updateData.phone = formattedPhone;
+    if (referencePhotoUrl) updateData.referencePhotoUrl = referencePhotoUrl;
     if (dto.hourlyRate !== undefined) {
       updateData.hourlyRate = dto.hourlyRate ? new Decimal(dto.hourlyRate) : null;
     }
+
+    // WH-347 fields
+    if (dto.address !== undefined) updateData.address = dto.address || null;
+    if (dto.city !== undefined) updateData.city = dto.city || null;
+    if (dto.state !== undefined) updateData.state = dto.state || null;
+    if (dto.zip !== undefined) updateData.zip = dto.zip || null;
+    if (dto.lastFourSSN !== undefined) updateData.lastFourSSN = dto.lastFourSSN || null;
+    if (dto.tradeClassification !== undefined) updateData.tradeClassification = dto.tradeClassification || null;
 
     const updatedUser = await this.prisma.user.update({
       where: { id: userId },
@@ -251,7 +250,6 @@ export class UsersService {
       include: { company: true },
     });
 
-    // General update log if there were other changes
     if (changes.length > 0 || dto.name !== user.name || dto.email !== user.email) {
       await this.auditService.log({
         companyId,
@@ -284,10 +282,8 @@ export class UsersService {
     });
   }
 
-  // ============ PAY RATE METHODS ============
-
   async getWorkerJobRates(companyId: string, userId: string) {
-    await this.findOne(companyId, userId); // Verify user exists
+    await this.findOne(companyId, userId);
 
     return this.prisma.workerJobRate.findMany({
       where: { companyId, userId },
@@ -301,7 +297,6 @@ export class UsersService {
   async setWorkerJobRate(companyId: string, userId: string, dto: SetWorkerJobRateDto, performedBy?: string) {
     const user = await this.findOne(companyId, userId);
 
-    // Verify job exists and belongs to company
     const job = await this.prisma.job.findFirst({
       where: { id: dto.jobId, companyId },
     });
@@ -310,7 +305,6 @@ export class UsersService {
       throw new NotFoundException('Job not found');
     }
 
-    // Upsert the rate
     const rate = await this.prisma.workerJobRate.upsert({
       where: {
         userId_jobId: { userId, jobId: dto.jobId },
@@ -382,7 +376,6 @@ export class UsersService {
     return { success: true };
   }
 
-  // Get effective rate for a worker on a specific job
   async getEffectiveRate(companyId: string, userId: string, jobId?: string): Promise<{ rate: number | null; isPrevailingWage: boolean; source: string }> {
     const user = await this.prisma.user.findFirst({
       where: { id: userId, companyId },
@@ -393,41 +386,38 @@ export class UsersService {
       return { rate: null, isPrevailingWage: false, source: 'none' };
     }
 
-    // If job specified, check for job-specific rate first
     if (jobId) {
       const jobRate = await this.prisma.workerJobRate.findFirst({
         where: { companyId, userId, jobId },
       });
 
       if (jobRate) {
-        return { 
-          rate: Number(jobRate.hourlyRate), 
+        return {
+          rate: Number(jobRate.hourlyRate),
           isPrevailingWage: jobRate.isPrevailingWage,
-          source: 'job_specific' 
+          source: 'job_specific',
         };
       }
 
-      // Check job default rate
       const job = await this.prisma.job.findFirst({
         where: { id: jobId, companyId },
         select: { defaultHourlyRate: true, isPrevailingWage: true },
       });
 
       if (job?.defaultHourlyRate) {
-        return { 
-          rate: Number(job.defaultHourlyRate), 
+        return {
+          rate: Number(job.defaultHourlyRate),
           isPrevailingWage: job.isPrevailingWage,
-          source: 'job_default' 
+          source: 'job_default',
         };
       }
     }
 
-    // Fall back to worker default rate
     if (user.hourlyRate) {
-      return { 
-        rate: Number(user.hourlyRate), 
+      return {
+        rate: Number(user.hourlyRate),
         isPrevailingWage: false,
-        source: 'worker_default' 
+        source: 'worker_default',
       };
     }
 
