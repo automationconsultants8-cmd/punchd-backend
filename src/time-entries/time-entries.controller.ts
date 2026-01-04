@@ -2,8 +2,9 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request, R
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { Response } from 'express';
 import { TimeEntriesService } from './time-entries.service';
-import { ClockInDto, ClockOutDto, ManualTimeEntryDto } from './dto';
+import { ClockInDto, ClockOutDto } from './dto';
 import { ApproveTimeEntryDto, BulkApproveDto, BulkRejectDto } from './dto/approve-time-entry.dto';
+import { CreateManualEntryDto } from './dto/create-manual-entry.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Time Entries')
@@ -23,12 +24,6 @@ export class TimeEntriesController {
   @ApiOperation({ summary: 'Clock out from current entry' })
   clockOut(@Request() req, @Body() dto: ClockOutDto) {
     return this.timeEntriesService.clockOut(req.user.userId, req.user.companyId, dto);
-  }
-
-  @Post('manual')
-  @ApiOperation({ summary: 'Create a manual time entry' })
-  createManualEntry(@Request() req, @Body() dto: ManualTimeEntryDto) {
-    return this.timeEntriesService.createManualEntry(req.user.companyId, dto, req.user.userId);
   }
 
   @Get('status')
@@ -55,55 +50,73 @@ export class TimeEntriesController {
     return this.timeEntriesService.getTimeEntries(req.user.companyId, {});
   }
 
-  @Get('pending')
-  @ApiOperation({ summary: 'Get all pending time entries for approval' })
-  getPendingApprovals(@Request() req) {
-    return this.timeEntriesService.getPendingApprovals(req.user.companyId);
-  }
-
-  @Get('approval-stats')
-  @ApiOperation({ summary: 'Get approval statistics' })
-  getApprovalStats(@Request() req) {
-    return this.timeEntriesService.getApprovalStats(req.user.companyId);
-  }
-
-  @Get('overtime-summary')
-  @ApiOperation({ summary: 'Get overtime summary with breakdown' })
-  @ApiQuery({ name: 'startDate', required: false, type: String })
-  @ApiQuery({ name: 'endDate', required: false, type: String })
-  getOvertimeSummary(
-    @Request() req,
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-  ) {
-    return this.timeEntriesService.getOvertimeSummary(
-      req.user.companyId,
-      startDate ? new Date(startDate) : undefined,
-      endDate ? new Date(endDate) : undefined,
-    );
-  }
-
   @Get('export/excel')
   @ApiOperation({ summary: 'Export time entries to Excel' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'userId', required: false, type: String })
   async exportExcel(
     @Request() req,
     @Res() res: Response,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('userId') userId?: string,
   ) {
-    const buffer = await this.timeEntriesService.exportToExcel(
-      req.user.companyId,
-      startDate ? new Date(startDate) : undefined,
-      endDate ? new Date(endDate) : undefined,
-    );
+    const buffer = await this.timeEntriesService.exportToExcel(req.user.companyId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      userId,
+    });
 
-    const filename = `timesheet-${startDate || 'all'}-to-${endDate || 'now'}.xlsx`;
-    
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=timesheet-${startDate || 'all'}-to-${endDate || 'present'}.xlsx`,
+      'Content-Length': buffer.length,
+    });
+
     res.send(buffer);
+  }
+
+  @Get('export/pdf')
+  @ApiOperation({ summary: 'Export time entries to PDF' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'userId', required: false, type: String })
+  async exportPdf(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('userId') userId?: string,
+  ) {
+    const pdfBuffer = await this.timeEntriesService.exportToPdf(req.user.companyId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      userId,
+    });
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename=timesheet-${startDate || 'all'}-to-${endDate || 'present'}.pdf`,
+      'Content-Length': pdfBuffer.length,
+    });
+
+    res.send(pdfBuffer);
+  }
+
+  @Get('overtime-summary')
+  @ApiOperation({ summary: 'Get overtime summary for date range' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  async getOvertimeSummary(
+    @Request() req,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.timeEntriesService.getOvertimeSummary(req.user.companyId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
   }
 
   @Get()
@@ -131,6 +144,20 @@ export class TimeEntriesController {
       entryType,
       approvalStatus,
     });
+  }
+
+  // ============ APPROVAL ENDPOINTS ============
+
+  @Get('pending')
+  @ApiOperation({ summary: 'Get all pending time entries for approval' })
+  getPendingApprovals(@Request() req) {
+    return this.timeEntriesService.getPendingApprovals(req.user.companyId);
+  }
+
+  @Get('approval-stats')
+  @ApiOperation({ summary: 'Get approval statistics' })
+  getApprovalStats(@Request() req) {
+    return this.timeEntriesService.getApprovalStats(req.user.companyId);
   }
 
   @Patch(':id/approve')
@@ -170,5 +197,14 @@ export class TimeEntriesController {
     @Body() dto: BulkRejectDto,
   ) {
     return this.timeEntriesService.bulkReject(dto.entryIds, req.user.userId, req.user.companyId, dto.rejectionReason);
+  }
+
+  @Post('manual')
+  @ApiOperation({ summary: 'Create a manual time entry' })
+  createManualEntry(
+    @Request() req,
+    @Body() dto: CreateManualEntryDto,
+  ) {
+    return this.timeEntriesService.createManualEntry(req.user.companyId, req.user.userId, dto);
   }
 }
