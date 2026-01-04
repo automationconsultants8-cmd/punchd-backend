@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateJobDto, UpdateJobDto } from './dto';
+import { Decimal } from '@prisma/client/runtime/library';
 import * as turf from '@turf/turf';
 
 @Injectable()
@@ -15,6 +16,11 @@ export class JobsService {
         address: dto.address,
         geofenceCenter: `${dto.latitude},${dto.longitude}`,
         geofenceRadiusMeters: dto.geofenceRadiusMeters || 100,
+        defaultHourlyRate: dto.defaultHourlyRate ? new Decimal(dto.defaultHourlyRate) : null,
+        isPrevailingWage: dto.isPrevailingWage || false,
+        projectNumber: dto.projectNumber || null,
+        contractNumber: dto.contractNumber || null,
+        wageDecisionNumber: dto.wageDecisionNumber || null,
       },
     });
   }
@@ -42,17 +48,32 @@ export class JobsService {
     await this.findOne(companyId, jobId);
 
     const updateData: any = {};
-    
-    if (dto.name) updateData.name = dto.name;
-    if (dto.address) updateData.address = dto.address;
-    if (dto.latitude && dto.longitude) {
+
+    if (dto.name !== undefined) updateData.name = dto.name;
+    if (dto.address !== undefined) updateData.address = dto.address;
+    if (dto.latitude !== undefined && dto.longitude !== undefined) {
       updateData.geofenceCenter = `${dto.latitude},${dto.longitude}`;
     }
-    if (dto.geofenceRadiusMeters) {
+    if (dto.geofenceRadiusMeters !== undefined) {
       updateData.geofenceRadiusMeters = dto.geofenceRadiusMeters;
     }
-    if (typeof dto.isActive !== 'undefined') {
+    if (dto.isActive !== undefined) {
       updateData.isActive = dto.isActive;
+    }
+    if (dto.defaultHourlyRate !== undefined) {
+      updateData.defaultHourlyRate = dto.defaultHourlyRate ? new Decimal(dto.defaultHourlyRate) : null;
+    }
+    if (dto.isPrevailingWage !== undefined) {
+      updateData.isPrevailingWage = dto.isPrevailingWage;
+    }
+    if (dto.projectNumber !== undefined) {
+      updateData.projectNumber = dto.projectNumber || null;
+    }
+    if (dto.contractNumber !== undefined) {
+      updateData.contractNumber = dto.contractNumber || null;
+    }
+    if (dto.wageDecisionNumber !== undefined) {
+      updateData.wageDecisionNumber = dto.wageDecisionNumber || null;
     }
 
     return this.prisma.job.update({
@@ -79,9 +100,9 @@ export class JobsService {
   ): { isWithin: boolean; distance: number } {
     const from = turf.point([jobLongitude, jobLatitude]);
     const to = turf.point([userLongitude, userLatitude]);
-    
+
     const distance = turf.distance(from, to, { units: 'meters' });
-    
+
     return {
       isWithin: distance <= radiusMeters,
       distance: Math.round(distance),
