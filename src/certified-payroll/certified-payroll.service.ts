@@ -51,14 +51,12 @@ export class CertifiedPayrollService {
       throw new NotFoundException('Prevailing wage job not found');
     }
 
-    // Calculate week start (Saturday before week ending)
     const weekEnding = new Date(weekEndingDate);
     const weekStart = new Date(weekEnding);
     weekStart.setDate(weekStart.getDate() - 6);
     weekStart.setHours(0, 0, 0, 0);
     weekEnding.setHours(23, 59, 59, 999);
 
-    // Get all approved time entries for this job during the week
     const timeEntries = await this.prisma.timeEntry.findMany({
       where: {
         companyId,
@@ -87,7 +85,6 @@ export class CertifiedPayrollService {
       orderBy: { clockInTime: 'asc' },
     });
 
-    // Group by worker and calculate daily hours
     const workerData: { [userId: string]: WorkerPayrollData } = {};
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -99,13 +96,12 @@ export class CertifiedPayrollService {
 
       if (!workerData[userId]) {
         const user = entry.user;
-        const fullAddress = [user.address, user.city, user.state, user.zip]
-          .filter(Boolean)
-          .join(', ');
+        const addressParts = [user.address, user.city, user.state, user.zip].filter(Boolean);
+        const fullAddress = addressParts.length > 0 ? addressParts.join(', ') : 'Address not provided';
 
         workerData[userId] = {
           name: user.name,
-          address: fullAddress || 'Address not provided',
+          address: fullAddress,
           lastFourSSN: user.lastFourSSN || 'XXXX',
           tradeClassification: user.tradeClassification || 'Laborer',
           dailyHours: { Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 },
@@ -126,7 +122,6 @@ export class CertifiedPayrollService {
       workerData[userId].grossPay += entry.laborCost ? Number(entry.laborCost) : 0;
     }
 
-    // Calculate net pay (gross - deductions, simplified)
     for (const userId in workerData) {
       workerData[userId].netPay = workerData[userId].grossPay - workerData[userId].deductions;
     }
@@ -149,7 +144,6 @@ export class CertifiedPayrollService {
   async createOrUpdatePayroll(companyId: string, jobId: string, weekEndingDate: Date, userId: string) {
     const payrollData = await this.generatePayrollData(companyId, jobId, weekEndingDate);
 
-    // Get next payroll number for this job
     const existingPayrolls = await this.prisma.certifiedPayroll.count({
       where: { companyId, jobId },
     });
@@ -267,144 +261,221 @@ export class CertifiedPayrollService {
     const data = payroll.reportData as any;
 
     return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ size: 'LETTER', layout: 'landscape', margin: 30 });
+      const doc = new PDFDocument({ 
+        size: 'LETTER', 
+        layout: 'landscape', 
+        margins: { top: 40, bottom: 40, left: 40, right: 40 } 
+      });
       const chunks: Buffer[] = [];
 
       doc.on('data', (chunk) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      // Header
-      doc.fontSize(14).font('Helvetica-Bold').text('U.S. DEPARTMENT OF LABOR', { align: 'center' });
-      doc.fontSize(12).text('PAYROLL', { align: 'center' });
-      doc.fontSize(10).font('Helvetica').text('(WH-347)', { align: 'center' });
-      doc.moveDown();
+      const pageWidth = 792; // Letter landscape
+      const leftMargin = 40;
+      const rightMargin = 752;
+      const contentWidth = rightMargin - leftMargin;
 
-      // Project Info
-      const leftCol = 30;
-      const rightCol = 400;
-      
-      doc.fontSize(9).font('Helvetica-Bold');
-      doc.text('NAME OF CONTRACTOR OR SUBCONTRACTOR:', leftCol, doc.y);
-      doc.font('Helvetica').text(data.company?.name || 'N/A', leftCol + 220, doc.y - 10);
-      
-      doc.moveDown(0.5);
-      doc.font('Helvetica-Bold').text('ADDRESS:', leftCol);
-      const companyAddress = [data.company?.address, data.company?.city, data.company?.state, data.company?.zip]
-        .filter(Boolean).join(', ');
-      doc.font('Helvetica').text(companyAddress || 'N/A', leftCol + 60, doc.y - 10);
-
-      doc.moveDown(0.5);
-      doc.font('Helvetica-Bold').text('PAYROLL NO:', leftCol);
-      doc.font('Helvetica').text(String(payroll.payrollNumber), leftCol + 80, doc.y - 10);
-
-      doc.font('Helvetica-Bold').text('FOR WEEK ENDING:', rightCol, doc.y - 10);
-      doc.font('Helvetica').text(new Date(payroll.weekEndingDate).toLocaleDateString(), rightCol + 120, doc.y - 10);
-
-      doc.moveDown(0.5);
-      doc.font('Helvetica-Bold').text('PROJECT AND LOCATION:', leftCol);
-      doc.font('Helvetica').text(`${data.job?.name || 'N/A'} - ${data.job?.address || 'N/A'}`, leftCol + 140, doc.y - 10);
-
-      doc.moveDown(0.5);
-      doc.font('Helvetica-Bold').text('PROJECT OR CONTRACT NO:', leftCol);
-      doc.font('Helvetica').text(data.job?.projectNumber || 'N/A', leftCol + 160, doc.y - 10);
-
+      // === HEADER ===
+      doc.fontSize(16).font('Helvetica-Bold').text('U.S. DEPARTMENT OF LABOR', leftMargin, 40, { align: 'center', width: contentWidth });
+      doc.fontSize(14).text('PAYROLL', { align: 'center', width: contentWidth });
+      doc.fontSize(10).font('Helvetica').text('(WH-347)', { align: 'center', width: contentWidth });
       doc.moveDown(1.5);
 
-      // Table Header
-      const tableTop = doc.y;
-      const colWidths = [120, 80, 40, 28, 28, 28, 28, 28, 28, 28, 40, 40, 50, 50, 50, 50];
-      const headers = ['Name/Address/SSN', 'Classification', 'S', 'M', 'T', 'W', 'T', 'F', 'S', 'Hrs', 'Rate', 'Gross', 'Ded.', 'Net'];
+      // === PROJECT INFO BOX ===
+      const infoStartY = doc.y;
+      doc.rect(leftMargin, infoStartY, contentWidth, 100).stroke();
+
+      // Left column
+      const col1X = leftMargin + 10;
+      const col2X = leftMargin + 180;
+      const col3X = leftMargin + 450;
+      const col4X = leftMargin + 560;
+      let infoY = infoStartY + 10;
+
+      // Company info
+      const companyAddress = [data.company?.address, data.company?.city, data.company?.state, data.company?.zip]
+        .filter(Boolean).join(', ') || 'N/A';
+
+      doc.fontSize(8).font('Helvetica-Bold').text('NAME OF CONTRACTOR:', col1X, infoY);
+      doc.font('Helvetica').text(data.company?.name || 'N/A', col2X, infoY);
+
+      infoY += 14;
+      doc.font('Helvetica-Bold').text('ADDRESS:', col1X, infoY);
+      doc.font('Helvetica').text(companyAddress, col2X, infoY, { width: 250 });
+
+      infoY += 14;
+      doc.font('Helvetica-Bold').text('PAYROLL NO:', col1X, infoY);
+      doc.font('Helvetica').text(String(payroll.payrollNumber), col2X, infoY);
+
+      doc.font('Helvetica-Bold').text('FOR WEEK ENDING:', col3X, infoY);
+      doc.font('Helvetica').text(new Date(payroll.weekEndingDate).toLocaleDateString('en-US'), col4X, infoY);
+
+      infoY += 14;
+      doc.font('Helvetica-Bold').text('PROJECT AND LOCATION:', col1X, infoY);
+      doc.font('Helvetica').text(`${data.job?.name || 'N/A'} - ${data.job?.address || 'N/A'}`, col2X, infoY, { width: 400 });
+
+      infoY += 14;
+      doc.font('Helvetica-Bold').text('PROJECT OR CONTRACT NO:', col1X, infoY);
+      doc.font('Helvetica').text(data.job?.projectNumber || 'N/A', col2X, infoY);
+
+      doc.font('Helvetica-Bold').text('WAGE DECISION NO:', col3X, infoY);
+      doc.font('Helvetica').text(data.job?.wageDecisionNumber || 'N/A', col4X, infoY);
+
+      // === TABLE ===
+      const tableStartY = infoStartY + 115;
       
-      let xPos = leftCol;
-      doc.fontSize(7).font('Helvetica-Bold');
+      // Column definitions
+      const cols = [
+        { header: 'Name, Address & SSN', width: 140, align: 'left' },
+        { header: 'Work\nClass', width: 45, align: 'center' },
+        { header: 'S', width: 32, align: 'center' },
+        { header: 'M', width: 32, align: 'center' },
+        { header: 'T', width: 32, align: 'center' },
+        { header: 'W', width: 32, align: 'center' },
+        { header: 'T', width: 32, align: 'center' },
+        { header: 'F', width: 32, align: 'center' },
+        { header: 'S', width: 32, align: 'center' },
+        { header: 'Total\nHrs', width: 40, align: 'center' },
+        { header: 'Rate of\nPay', width: 55, align: 'right' },
+        { header: 'Gross', width: 65, align: 'right' },
+        { header: 'Ded.', width: 50, align: 'right' },
+        { header: 'Net Pay', width: 65, align: 'right' },
+      ];
+
+      // Draw table header
+      let xPos = leftMargin;
+      const headerHeight = 28;
       
-      headers.forEach((header, i) => {
-        doc.text(header, xPos, tableTop, { width: colWidths[i], align: 'center' });
-        xPos += colWidths[i];
+      doc.rect(leftMargin, tableStartY, contentWidth, headerHeight).fillAndStroke('#f0f0f0', '#000');
+      
+      xPos = leftMargin;
+      doc.fillColor('#000').fontSize(7).font('Helvetica-Bold');
+      
+      cols.forEach((col) => {
+        doc.text(col.header, xPos + 3, tableStartY + 6, { 
+          width: col.width - 6, 
+          align: col.align as any,
+          lineGap: 1
+        });
+        xPos += col.width;
       });
 
-      doc.moveTo(leftCol, tableTop + 12).lineTo(750, tableTop + 12).stroke();
+      // Draw vertical lines for header
+      xPos = leftMargin;
+      cols.forEach((col) => {
+        doc.moveTo(xPos, tableStartY).lineTo(xPos, tableStartY + headerHeight).stroke();
+        xPos += col.width;
+      });
+      doc.moveTo(xPos, tableStartY).lineTo(xPos, tableStartY + headerHeight).stroke();
 
-      // Table Rows
-      let yPos = tableTop + 18;
-      doc.font('Helvetica').fontSize(7);
-
+      // Draw data rows
+      let rowY = tableStartY + headerHeight;
+      const rowHeight = 36;
       const workers = data.workers || [];
-      workers.forEach((worker: WorkerPayrollData, index: number) => {
-        if (yPos > 520) {
-          doc.addPage();
-          yPos = 50;
-        }
 
-        xPos = leftCol;
-        
-        // Name, Address, SSN (stacked)
-        doc.text(worker.name, xPos, yPos, { width: colWidths[0] });
-        doc.fontSize(6).text(`XXX-XX-${worker.lastFourSSN}`, xPos, yPos + 8, { width: colWidths[0] });
-        doc.fontSize(7);
-        xPos += colWidths[0];
+      doc.font('Helvetica').fontSize(7).fillColor('#000');
+
+      workers.forEach((worker: WorkerPayrollData) => {
+        // Draw row background (alternating)
+        doc.rect(leftMargin, rowY, contentWidth, rowHeight).stroke();
+
+        xPos = leftMargin;
+
+        // Name, Address, SSN column
+        doc.fontSize(8).font('Helvetica-Bold').text(worker.name, xPos + 3, rowY + 4, { width: cols[0].width - 6 });
+        doc.fontSize(6).font('Helvetica').text(worker.address, xPos + 3, rowY + 14, { width: cols[0].width - 6 });
+        doc.text(`XXX-XX-${worker.lastFourSSN}`, xPos + 3, rowY + 24, { width: cols[0].width - 6 });
+        xPos += cols[0].width;
 
         // Classification
-        doc.text(worker.tradeClassification, xPos, yPos, { width: colWidths[1], align: 'center' });
-        xPos += colWidths[1];
-
-        // Work classification (O/S/H = Other/Straight/Holiday)
-        doc.text('S', xPos, yPos, { width: colWidths[2], align: 'center' });
-        xPos += colWidths[2];
+        doc.fontSize(7).text(worker.tradeClassification, xPos + 2, rowY + 12, { width: cols[1].width - 4, align: 'center' });
+        xPos += cols[1].width;
 
         // Daily hours
         const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         days.forEach((day, i) => {
           const hrs = worker.dailyHours[day] || 0;
-          doc.text(hrs > 0 ? hrs.toFixed(1) : '-', xPos, yPos, { width: colWidths[3 + i], align: 'center' });
-          xPos += colWidths[3 + i];
+          doc.text(hrs > 0 ? hrs.toFixed(1) : '-', xPos + 2, rowY + 12, { width: cols[2 + i].width - 4, align: 'center' });
+          xPos += cols[2 + i].width;
         });
 
         // Total hours
-        doc.text(worker.totalHours.toFixed(1), xPos, yPos, { width: colWidths[10], align: 'center' });
-        xPos += colWidths[10];
+        doc.font('Helvetica-Bold').text(worker.totalHours.toFixed(1), xPos + 2, rowY + 12, { width: cols[9].width - 4, align: 'center' });
+        xPos += cols[9].width;
 
         // Rate
-        doc.text(`$${worker.hourlyRate.toFixed(2)}`, xPos, yPos, { width: colWidths[11], align: 'center' });
-        xPos += colWidths[11];
+        doc.font('Helvetica').text(`$${worker.hourlyRate.toFixed(2)}`, xPos + 2, rowY + 12, { width: cols[10].width - 4, align: 'right' });
+        xPos += cols[10].width;
 
         // Gross
-        doc.text(`$${worker.grossPay.toFixed(2)}`, xPos, yPos, { width: colWidths[12], align: 'center' });
-        xPos += colWidths[12];
+        doc.font('Helvetica-Bold').text(`$${worker.grossPay.toFixed(2)}`, xPos + 2, rowY + 12, { width: cols[11].width - 4, align: 'right' });
+        xPos += cols[11].width;
 
         // Deductions
-        doc.text(`$${worker.deductions.toFixed(2)}`, xPos, yPos, { width: colWidths[13], align: 'center' });
-        xPos += colWidths[13];
+        doc.font('Helvetica').text(`$${worker.deductions.toFixed(2)}`, xPos + 2, rowY + 12, { width: cols[12].width - 4, align: 'right' });
+        xPos += cols[12].width;
 
         // Net
-        doc.text(`$${worker.netPay.toFixed(2)}`, xPos, yPos, { width: colWidths[14], align: 'center' });
+        doc.font('Helvetica-Bold').text(`$${worker.netPay.toFixed(2)}`, xPos + 2, rowY + 12, { width: cols[13].width - 4, align: 'right' });
 
-        yPos += 20;
+        // Draw vertical lines
+        xPos = leftMargin;
+        cols.forEach((col) => {
+          doc.moveTo(xPos, rowY).lineTo(xPos, rowY + rowHeight).stroke();
+          xPos += col.width;
+        });
+        doc.moveTo(xPos, rowY).lineTo(xPos, rowY + rowHeight).stroke();
+
+        rowY += rowHeight;
       });
 
       // Totals row
-      doc.moveTo(leftCol, yPos).lineTo(750, yPos).stroke();
-      yPos += 5;
-      
+      const totalsHeight = 24;
+      doc.rect(leftMargin, rowY, contentWidth, totalsHeight).fillAndStroke('#f5f5f5', '#000');
+
       const totalGross = workers.reduce((sum: number, w: WorkerPayrollData) => sum + w.grossPay, 0);
+      const totalDed = workers.reduce((sum: number, w: WorkerPayrollData) => sum + w.deductions, 0);
       const totalNet = workers.reduce((sum: number, w: WorkerPayrollData) => sum + w.netPay, 0);
+
+      doc.fillColor('#000').font('Helvetica-Bold').fontSize(8);
+      doc.text('TOTALS:', leftMargin + 5, rowY + 7);
+
+      // Position for totals
+      let totalsX = leftMargin;
+      for (let i = 0; i < 11; i++) totalsX += cols[i].width;
       
-      doc.font('Helvetica-Bold');
-      doc.text('TOTALS:', leftCol, yPos);
-      doc.text(`$${totalGross.toFixed(2)}`, leftCol + 490, yPos);
-      doc.text(`$${totalNet.toFixed(2)}`, leftCol + 590, yPos);
+      doc.text(`$${totalGross.toFixed(2)}`, totalsX + 2, rowY + 7, { width: cols[11].width - 4, align: 'right' });
+      totalsX += cols[11].width;
+      doc.text(`$${totalDed.toFixed(2)}`, totalsX + 2, rowY + 7, { width: cols[12].width - 4, align: 'right' });
+      totalsX += cols[12].width;
+      doc.text(`$${totalNet.toFixed(2)}`, totalsX + 2, rowY + 7, { width: cols[13].width - 4, align: 'right' });
 
-      // Certification section
-      yPos += 40;
-      doc.font('Helvetica').fontSize(8);
-      doc.text('I certify that the above payroll is correct and complete, and that each employee has been paid the full wages earned ' +
-        'without any deductions or rebates except those authorized by law.', leftCol, yPos, { width: 700 });
+      rowY += totalsHeight;
 
-      yPos += 40;
-      doc.text('Signature: _________________________________', leftCol, yPos);
-      doc.text('Title: _________________________________', leftCol + 300, yPos);
-      doc.text('Date: _________________________________', leftCol + 500, yPos);
+      // === CERTIFICATION ===
+      rowY += 20;
+      doc.font('Helvetica').fontSize(8).fillColor('#000');
+      doc.text(
+        'I, the undersigned, certify that the above payroll is correct and complete, that the wage rates contained therein are not less than those determined by the Secretary of Labor, and that each employee has been paid the full wages earned without any deductions or rebates except those authorized by law.',
+        leftMargin, rowY, { width: contentWidth, align: 'justify' }
+      );
+
+      rowY += 50;
+      
+      // Signature lines
+      const sigWidth = 200;
+      const sigGap = 70;
+      
+      doc.moveTo(leftMargin, rowY).lineTo(leftMargin + sigWidth, rowY).stroke();
+      doc.fontSize(8).text('Signature', leftMargin, rowY + 3);
+
+      doc.moveTo(leftMargin + sigWidth + sigGap, rowY).lineTo(leftMargin + sigWidth * 2 + sigGap, rowY).stroke();
+      doc.text('Title', leftMargin + sigWidth + sigGap, rowY + 3);
+
+      doc.moveTo(leftMargin + sigWidth * 2 + sigGap * 2, rowY).lineTo(leftMargin + sigWidth * 3 + sigGap * 2, rowY).stroke();
+      doc.text('Date', leftMargin + sigWidth * 2 + sigGap * 2, rowY + 3);
 
       doc.end();
     });
