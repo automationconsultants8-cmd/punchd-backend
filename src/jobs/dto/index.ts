@@ -1,71 +1,109 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsNumber, IsOptional, IsBoolean, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsOptional, IsBoolean, Min } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateJobDto {
-  @ApiProperty({ example: 'Main Street Construction Site' })
+  @ApiProperty()
   @IsString()
-  @IsNotEmpty()
   name: string;
 
-  @ApiProperty({ example: '123 Main St, Los Angeles, CA 90012' })
+  @ApiProperty()
   @IsString()
-  @IsNotEmpty()
   address: string;
 
-  @ApiProperty({ example: 34.0522 })
+  @ApiProperty()
   @IsNumber()
-  @Min(-90)
-  @Max(90)
   latitude: number;
 
-  @ApiProperty({ example: -118.2437 })
+  @ApiProperty()
   @IsNumber()
-  @Min(-180)
-  @Max(180)
   longitude: number;
 
-  @ApiProperty({ example: 100, default: 100 })
-  @IsNumber()
+  @ApiPropertyOptional()
   @IsOptional()
+  @IsNumber()
   @Min(10)
-  @Max(5000)
   geofenceRadiusMeters?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  defaultHourlyRate?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isPrevailingWage?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  projectNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  contractNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  wageDecisionNumber?: string;
 }
 
 export class UpdateJobDto {
-  @ApiProperty({ required: false })
-  @IsString()
+  @ApiPropertyOptional()
   @IsOptional()
+  @IsString()
   name?: string;
 
-  @ApiProperty({ required: false })
-  @IsString()
+  @ApiPropertyOptional()
   @IsOptional()
+  @IsString()
   address?: string;
 
-  @ApiProperty({ required: false })
-  @IsNumber()
+  @ApiPropertyOptional()
   @IsOptional()
-  @Min(-90)
-  @Max(90)
+  @IsNumber()
   latitude?: number;
 
-  @ApiProperty({ required: false })
-  @IsNumber()
+  @ApiPropertyOptional()
   @IsOptional()
-  @Min(-180)
-  @Max(180)
+  @IsNumber()
   longitude?: number;
 
-  @ApiProperty({ required: false })
-  @IsNumber()
+  @ApiPropertyOptional()
   @IsOptional()
+  @IsNumber()
   @Min(10)
-  @Max(5000)
   geofenceRadiusMeters?: number;
 
-  @ApiProperty({ required: false })
-  @IsBoolean()
+  @ApiPropertyOptional()
   @IsOptional()
+  @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  defaultHourlyRate?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isPrevailingWage?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  projectNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  contractNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  wageDecisionNumber?: string;
 }
