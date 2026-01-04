@@ -1048,4 +1048,138 @@ export class TimeEntriesService {
       });
     });
   }
+
+  async exportToQuickBooks(
+    companyId: string,
+    filters: { startDate?: Date; endDate?: Date; format?: 'iif' | 'csv' }
+  ): Promise<string> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+    });
+
+    const where: any = { companyId, clockOutTime: { not: null } };
+
+    if (filters.startDate || filters.endDate) {
+      where.clockInTime = {};
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        job: { select: { id: true, name: true, address: true } },
+      },
+      orderBy: [{ userId: 'asc' }, { clockInTime: 'asc' }],
+    });
+
+    if (filters.format === 'iif') {
+      return this.generateQuickBooksIIF(entries, company?.name || 'Company');
+    } else {
+      return this.generateQuickBooksCSV(entries);
+    }
+  }
+
+  private generateQuickBooksCSV(entries: any[]): string {
+    const lines: string[] = [];
+    
+    lines.push([
+      'Employee',
+      'Customer:Job',
+      'Service Item',
+      'Date',
+      'Regular Hours',
+      'OT Hours',
+      'DT Hours',
+      'Total Hours',
+      'Hourly Rate',
+      'Regular Pay',
+      'OT Pay',
+      'DT Pay',
+      'Total Pay',
+      'Notes'
+    ].join(','));
+
+    for (const entry of entries) {
+      const date = entry.clockInTime 
+        ? new Date(entry.clockInTime).toLocaleDateString('en-US')
+        : '';
+      
+      const regularHours = ((entry.regularMinutes || 0) / 60).toFixed(2);
+      const otHours = ((entry.overtimeMinutes || 0) / 60).toFixed(2);
+      const dtHours = ((entry.doubleTimeMinutes || 0) / 60).toFixed(2);
+      const totalHours = ((entry.durationMinutes || 0) / 60).toFixed(2);
+      
+      const rate = entry.hourlyRate ? Number(entry.hourlyRate) : 0;
+      const regularPay = ((entry.regularMinutes || 0) / 60) * rate;
+      const otPay = ((entry.overtimeMinutes || 0) / 60) * rate * 1.5;
+      const dtPay = ((entry.doubleTimeMinutes || 0) / 60) * rate * 2;
+      const totalPay = entry.laborCost ? Number(entry.laborCost) : 0;
+
+      const escapeCsv = (val: string) => {
+        if (val && (val.includes(',') || val.includes('"') || val.includes('\n'))) {
+          return `"${val.replace(/"/g, '""')}"`;
+        }
+        return val || '';
+      };
+
+      lines.push([
+        escapeCsv(entry.user?.name || 'Unknown'),
+        escapeCsv(entry.job?.name || 'Unassigned'),
+        'Labor',
+        date,
+        regularHours,
+        otHours,
+        dtHours,
+        totalHours,
+        rate.toFixed(2),
+        regularPay.toFixed(2),
+        otPay.toFixed(2),
+        dtPay.toFixed(2),
+        totalPay.toFixed(2),
+        escapeCsv(entry.notes || '')
+      ].join(','));
+    }
+
+    return lines.join('\n');
+  }
+
+  private generateQuickBooksIIF(entries: any[], companyName: string): string {
+    const lines: string[] = [];
+    
+    lines.push('!TIMERHDR\tVER\tREL\tCOMPANYNAME\tIMPORTEDBEFORE\tFROMTIMER\tCOMPANYCREATETIME');
+    lines.push(`TIMERHDR\t8\t0\t${companyName}\tN\tY\t0`);
+    
+    lines.push('!TIMEACT\tDATE\tJOB\tEMP\tITEM\tDURATION\tPROJ\tNOTE\tBILLINGSTATUS');
+    
+    for (const entry of entries) {
+      const date = entry.clockInTime 
+        ? new Date(entry.clockInTime).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
+        : '';
+      
+      const totalHours = ((entry.durationMinutes || 0) / 60).toFixed(2);
+      const employeeName = entry.user?.name || 'Unknown';
+      const jobName = entry.job?.name || '';
+      const notes = entry.notes || '';
+
+      lines.push([
+        'TIMEACT',
+        date,
+        jobName,
+        employeeName,
+        'Labor',
+        totalHours,
+        jobName,
+        notes.replace(/\t/g, ' ').replace(/\n/g, ' '),
+        '0'
+      ].join('\t'));
+    }
+
+    return lines.join('\r\n');
+  }
 }
