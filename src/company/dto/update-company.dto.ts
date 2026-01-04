@@ -26,9 +26,4 @@ export class UpdateCompanyDto {
   @IsString()
   @IsOptional()
   zip?: string;
-
-  @ApiPropertyOptional()
-  @IsString()
-  @IsOptional()
-  timezone?: string;
 }
