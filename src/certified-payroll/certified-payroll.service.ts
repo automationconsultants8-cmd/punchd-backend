@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import * as PDFDocument from 'pdfkit';
 
-interface WorkerPayrollData {
+export interface WorkerPayrollData {
   name: string;
   address: string;
   lastFourSSN: string;
@@ -16,6 +16,16 @@ interface WorkerPayrollData {
   grossPay: number;
   deductions: number;
   netPay: number;
+}
+
+export interface PayrollPreviewData {
+  job: any;
+  company: any;
+  weekStart: Date;
+  weekEnding: Date;
+  workers: WorkerPayrollData[];
+  totalGrossPay: number;
+  entryCount: number;
 }
 
 @Injectable()
@@ -32,7 +42,7 @@ export class CertifiedPayrollService {
     });
   }
 
-  async generatePayrollData(companyId: string, jobId: string, weekEndingDate: Date) {
+  async generatePayrollData(companyId: string, jobId: string, weekEndingDate: Date): Promise<PayrollPreviewData> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, companyId, isPrevailingWage: true },
     });
