@@ -225,7 +225,7 @@ export class TimeEntriesService {
         regularMinutes: overtimeCalc.regularMinutes,
         overtimeMinutes: overtimeCalc.overtimeMinutes,
         doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
-        effectiveRate: overtimeCalc.effectiveRate ? new Decimal(overtimeCalc.effectiveRate) : null,
+        hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
         laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
       },
       include: {
@@ -658,7 +658,7 @@ export class TimeEntriesService {
         regularMinutes: overtimeCalc.regularMinutes,
         overtimeMinutes: overtimeCalc.overtimeMinutes,
         doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
-        effectiveRate: overtimeCalc.effectiveRate ? new Decimal(overtimeCalc.effectiveRate) : null,
+        hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
         laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
       },
       include: {
@@ -723,7 +723,7 @@ export class TimeEntriesService {
         };
       }
 
-      const rate = entry.effectiveRate ? Number(entry.effectiveRate) : 0;
+      const rate = entry.hourlyRate ? Number(entry.hourlyRate) : 0;
       byWorker[workerId].regularMinutes += entry.regularMinutes || 0;
       byWorker[workerId].overtimeMinutes += entry.overtimeMinutes || 0;
       byWorker[workerId].doubleTimeMinutes += entry.doubleTimeMinutes || 0;
@@ -834,7 +834,7 @@ export class TimeEntriesService {
         ((entry.overtimeMinutes || 0) / 60).toFixed(2),
         ((entry.doubleTimeMinutes || 0) / 60).toFixed(2),
         ((entry.durationMinutes || 0) / 60).toFixed(2),
-        entry.effectiveRate ? `$${Number(entry.effectiveRate).toFixed(2)}` : '-',
+        entry.hourlyRate ? `$${Number(entry.hourlyRate).toFixed(2)}` : '-',
         entry.laborCost ? `$${Number(entry.laborCost).toFixed(2)}` : '-',
         entry.approvalStatus || 'PENDING',
       ]);
@@ -845,7 +845,8 @@ export class TimeEntriesService {
       column.width = 15;
     });
 
-    return workbook.xlsx.writeBuffer() as Promise<Buffer>;
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
   }
 
   async exportToPdf(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }) {
@@ -992,7 +993,7 @@ export class TimeEntriesService {
         const otHrs = ((entry.overtimeMinutes || 0) / 60).toFixed(1);
         const dtHrs = ((entry.doubleTimeMinutes || 0) / 60).toFixed(1);
         const totalHrs = ((entry.durationMinutes || 0) / 60).toFixed(1);
-        const rate = entry.effectiveRate ? `$${Number(entry.effectiveRate).toFixed(2)}` : '-';
+        const rate = entry.hourlyRate ? `$${Number(entry.hourlyRate).toFixed(2)}` : '-';
         const amount = entry.laborCost ? `$${Number(entry.laborCost).toFixed(2)}` : '-';
 
         workerTotalRegular += (entry.regularMinutes || 0) / 60;
