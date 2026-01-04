@@ -4,28 +4,11 @@ import { JobsService } from '../jobs/jobs.service';
 import { AwsService } from '../aws/aws.service';
 import { EmailService } from '../email/email.service';
 import { AuditService } from '../audit/audit.service';
-import { BreakComplianceService } from '../break-compliance/break-compliance.service';
-import { ClockInDto, ClockOutDto, ManualTimeEntryDto } from './dto';
+import { ClockInDto, ClockOutDto } from './dto';
+import { CreateManualEntryDto } from './dto/create-manual-entry.dto';
 import { Decimal } from '@prisma/client/runtime/library';
 import * as ExcelJS from 'exceljs';
-
-interface OvertimeSettings {
-  dailyOtThreshold: number;
-  dailyDtThreshold: number;
-  weeklyOtThreshold: number;
-  otMultiplier: number;
-  dtMultiplier: number;
-}
-
-interface OvertimeBreakdown {
-  regularMinutes: number;
-  overtimeMinutes: number;
-  doubleTimeMinutes: number;
-  regularPay: number;
-  overtimePay: number;
-  doubleTimePay: number;
-  totalPay: number;
-}
+import * as PDFDocument from 'pdfkit';
 
 @Injectable()
 export class TimeEntriesService {
@@ -35,361 +18,7 @@ export class TimeEntriesService {
     private awsService: AwsService,
     private emailService: EmailService,
     private auditService: AuditService,
-    private breakComplianceService: BreakComplianceService,
   ) {}
-
-  // ============ OVERTIME SETTINGS ============
-
-  private async getOvertimeSettings(companyId: string): Promise<OvertimeSettings> {
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: { overtimeSettings: true },
-    });
-
-    const defaults: OvertimeSettings = {
-      dailyOtThreshold: 480,
-      dailyDtThreshold: 720,
-      weeklyOtThreshold: 2400,
-      otMultiplier: 1.5,
-      dtMultiplier: 2.0,
-    };
-
-    if (!company?.overtimeSettings) return defaults;
-
-    const settings = company.overtimeSettings as any;
-    return {
-      dailyOtThreshold: settings.dailyOtThreshold ?? defaults.dailyOtThreshold,
-      dailyDtThreshold: settings.dailyDtThreshold ?? defaults.dailyDtThreshold,
-      weeklyOtThreshold: settings.weeklyOtThreshold ?? defaults.weeklyOtThreshold,
-      otMultiplier: settings.otMultiplier ?? defaults.otMultiplier,
-      dtMultiplier: settings.dtMultiplier ?? defaults.dtMultiplier,
-    };
-  }
-
-  private async getWeeklyMinutesWorked(userId: string, companyId: string, beforeDate: Date): Promise<number> {
-    const startOfWeek = new Date(beforeDate);
-    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    const entries = await this.prisma.timeEntry.findMany({
-      where: {
-        userId,
-        companyId,
-        clockOutTime: { not: null },
-        clockInTime: {
-          gte: startOfWeek,
-          lt: beforeDate,
-        },
-      },
-      select: { durationMinutes: true, breakMinutes: true },
-    });
-
-    return entries.reduce((sum, e) => sum + ((e.durationMinutes || 0) - (e.breakMinutes || 0)), 0);
-  }
-
-  private calculateOvertimeBreakdown(
-    durationMinutes: number,
-    hourlyRate: number,
-    settings: OvertimeSettings,
-    weeklyMinutesBefore: number,
-  ): OvertimeBreakdown {
-    let regularMinutes = 0;
-    let overtimeMinutes = 0;
-    let doubleTimeMinutes = 0;
-
-    if (durationMinutes <= settings.dailyOtThreshold) {
-      regularMinutes = durationMinutes;
-    } else if (durationMinutes <= settings.dailyDtThreshold) {
-      regularMinutes = settings.dailyOtThreshold;
-      overtimeMinutes = durationMinutes - settings.dailyOtThreshold;
-    } else {
-      regularMinutes = settings.dailyOtThreshold;
-      overtimeMinutes = settings.dailyDtThreshold - settings.dailyOtThreshold;
-      doubleTimeMinutes = durationMinutes - settings.dailyDtThreshold;
-    }
-
-    const totalWeeklyAfter = weeklyMinutesBefore + regularMinutes;
-    if (totalWeeklyAfter > settings.weeklyOtThreshold) {
-      if (weeklyMinutesBefore < settings.weeklyOtThreshold) {
-        const regularBeforeWeeklyOt = settings.weeklyOtThreshold - weeklyMinutesBefore;
-        const excessRegular = regularMinutes - regularBeforeWeeklyOt;
-        regularMinutes = regularBeforeWeeklyOt;
-        overtimeMinutes += excessRegular;
-      } else {
-        overtimeMinutes += regularMinutes;
-        regularMinutes = 0;
-      }
-    }
-
-    const regularPay = (regularMinutes / 60) * hourlyRate;
-    const overtimePay = (overtimeMinutes / 60) * hourlyRate * settings.otMultiplier;
-    const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * settings.dtMultiplier;
-
-    return {
-      regularMinutes,
-      overtimeMinutes,
-      doubleTimeMinutes,
-      regularPay: Math.round(regularPay * 100) / 100,
-      overtimePay: Math.round(overtimePay * 100) / 100,
-      doubleTimePay: Math.round(doubleTimePay * 100) / 100,
-      totalPay: Math.round((regularPay + overtimePay + doubleTimePay) * 100) / 100,
-    };
-  }
-
-  // ============ PAY RATES ============
-
-  private async getEffectiveRate(companyId: string, userId: string, jobId?: string): Promise<{ rate: number | null; isPrevailingWage: boolean }> {
-    if (jobId) {
-      const jobRate = await this.prisma.workerJobRate.findFirst({
-        where: { companyId, userId, jobId },
-      });
-
-      if (jobRate) {
-        return { rate: Number(jobRate.hourlyRate), isPrevailingWage: jobRate.isPrevailingWage };
-      }
-
-      const job = await this.prisma.job.findFirst({
-        where: { id: jobId, companyId },
-        select: { defaultHourlyRate: true, isPrevailingWage: true },
-      });
-
-      if (job?.defaultHourlyRate) {
-        return { rate: Number(job.defaultHourlyRate), isPrevailingWage: job.isPrevailingWage };
-      }
-    }
-
-    const user = await this.prisma.user.findFirst({
-      where: { id: userId, companyId },
-      select: { hourlyRate: true },
-    });
-
-    if (user?.hourlyRate) {
-      return { rate: Number(user.hourlyRate), isPrevailingWage: false };
-    }
-
-    return { rate: null, isPrevailingWage: false };
-  }
-
-  // ============ MANUAL ENTRY ============
-
-  async createManualEntry(companyId: string, dto: ManualTimeEntryDto, createdBy: string) {
-    const user = await this.prisma.user.findFirst({
-      where: { id: dto.userId, companyId },
-    });
-    if (!user) throw new NotFoundException('Worker not found');
-
-    const job = await this.prisma.job.findFirst({
-      where: { id: dto.jobId, companyId },
-    });
-    if (!job) throw new NotFoundException('Job not found');
-
-    const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00`);
-    const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00`);
-
-    if (clockOutTime <= clockInTime) {
-      clockOutTime.setDate(clockOutTime.getDate() + 1);
-    }
-
-    const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
-    const breakMinutes = dto.breakMinutes || 0;
-    const durationMinutes = totalMinutes - breakMinutes;
-
-    const { rate, isPrevailingWage } = await this.getEffectiveRate(companyId, dto.userId, dto.jobId);
-    const otSettings = await this.getOvertimeSettings(companyId);
-    const weeklyMinutesBefore = await this.getWeeklyMinutesWorked(dto.userId, companyId, clockInTime);
-
-    const breakdown = rate
-      ? this.calculateOvertimeBreakdown(durationMinutes, rate, otSettings, weeklyMinutesBefore)
-      : {
-          regularMinutes: durationMinutes,
-          overtimeMinutes: 0,
-          doubleTimeMinutes: 0,
-          regularPay: 0,
-          overtimePay: 0,
-          doubleTimePay: 0,
-          totalPay: 0,
-        };
-
-    // Check break compliance
-    const complianceSettings = await this.breakComplianceService.getComplianceSettings(companyId);
-    const complianceResult = this.breakComplianceService.checkCompliance(
-      durationMinutes,
-      breakMinutes,
-      0,
-      complianceSettings,
-    );
-
-    const entry = await this.prisma.timeEntry.create({
-      data: {
-        companyId,
-        userId: dto.userId,
-        jobId: dto.jobId,
-        clockInTime,
-        clockOutTime,
-        durationMinutes,
-        breakMinutes,
-        notes: dto.notes ? `[Manual Entry] ${dto.notes}` : '[Manual Entry]',
-        approvalStatus: 'APPROVED',
-        hourlyRate: rate ? new Decimal(rate) : null,
-        isPrevailingWage,
-        regularMinutes: breakdown.regularMinutes,
-        overtimeMinutes: breakdown.overtimeMinutes,
-        doubleTimeMinutes: breakdown.doubleTimeMinutes,
-        regularPay: new Decimal(breakdown.regularPay),
-        overtimePay: new Decimal(breakdown.overtimePay),
-        doubleTimePay: new Decimal(breakdown.doubleTimePay),
-        laborCost: new Decimal(breakdown.totalPay),
-        breakCompliant: complianceResult.isCompliant,
-        mealBreaksTaken: breakMinutes >= 30 ? 1 : 0,
-      },
-      include: {
-        user: { select: { id: true, name: true, phone: true } },
-        job: true,
-      },
-    });
-
-    // Record violations if any
-    if (!complianceResult.isCompliant) {
-      await this.breakComplianceService.recordViolations(
-        companyId,
-        dto.userId,
-        entry.id,
-        complianceResult.violations,
-        rate,
-      );
-    }
-
-    await this.auditService.log({
-      companyId,
-      userId: createdBy,
-      action: 'TIME_ENTRY_APPROVED',
-      targetType: 'TIME_ENTRY',
-      targetId: entry.id,
-      details: {
-        type: 'manual_entry',
-        workerName: user.name,
-        jobName: job.name,
-        durationMinutes,
-        laborCost: breakdown.totalPay,
-        breakCompliant: complianceResult.isCompliant,
-        violations: complianceResult.violations.length,
-      },
-    });
-
-    return entry;
-  }
-
-  // ============ EXPORT TO EXCEL ============
-
-  async exportToExcel(companyId: string, startDate?: Date, endDate?: Date): Promise<Buffer> {
-    const entries = await this.getTimeEntries(companyId, { startDate, endDate });
-
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Punchd';
-    workbook.created = new Date();
-
-    const sheet = workbook.addWorksheet('Timesheet');
-
-    sheet.columns = [
-      { header: 'Worker', key: 'worker', width: 20 },
-      { header: 'Job Site', key: 'job', width: 25 },
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Clock In', key: 'clockIn', width: 10 },
-      { header: 'Clock Out', key: 'clockOut', width: 10 },
-      { header: 'Break (min)', key: 'break', width: 12 },
-      { header: 'Regular Hrs', key: 'regularHrs', width: 12 },
-      { header: 'OT Hrs (1.5x)', key: 'otHrs', width: 12 },
-      { header: 'DT Hrs (2x)', key: 'dtHrs', width: 12 },
-      { header: 'Total Hrs', key: 'totalHrs', width: 10 },
-      { header: 'Hourly Rate', key: 'rate', width: 12 },
-      { header: 'Regular Pay', key: 'regularPay', width: 12 },
-      { header: 'OT Pay', key: 'otPay', width: 12 },
-      { header: 'DT Pay', key: 'dtPay', width: 12 },
-      { header: 'Total Pay', key: 'totalPay', width: 12 },
-      { header: 'Break Compliant', key: 'breakCompliant', width: 14 },
-      { header: 'Break Penalty', key: 'breakPenalty', width: 12 },
-      { header: 'Status', key: 'status', width: 12 },
-    ];
-
-    sheet.getRow(1).font = { bold: true };
-    sheet.getRow(1).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FF4F46E5' },
-    };
-    sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-
-    entries.forEach((entry: any) => {
-      const regularHrs = (entry.regularMinutes || 0) / 60;
-      const otHrs = (entry.overtimeMinutes || 0) / 60;
-      const dtHrs = (entry.doubleTimeMinutes || 0) / 60;
-      const totalHrs = (entry.durationMinutes || 0) / 60;
-
-      sheet.addRow({
-        worker: entry.user?.name || 'Unknown',
-        job: entry.job?.name || 'Unassigned',
-        date: entry.clockInTime ? new Date(entry.clockInTime).toLocaleDateString() : '',
-        clockIn: entry.clockInTime ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '',
-        clockOut: entry.clockOutTime ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : 'Active',
-        break: entry.breakMinutes || 0,
-        regularHrs: regularHrs.toFixed(2),
-        otHrs: otHrs.toFixed(2),
-        dtHrs: dtHrs.toFixed(2),
-        totalHrs: totalHrs.toFixed(2),
-        rate: entry.hourlyRate ? `$${Number(entry.hourlyRate).toFixed(2)}` : '-',
-        regularPay: entry.regularPay ? `$${Number(entry.regularPay).toFixed(2)}` : '-',
-        otPay: entry.overtimePay ? `$${Number(entry.overtimePay).toFixed(2)}` : '-',
-        dtPay: entry.doubleTimePay ? `$${Number(entry.doubleTimePay).toFixed(2)}` : '-',
-        totalPay: entry.laborCost ? `$${Number(entry.laborCost).toFixed(2)}` : '-',
-        breakCompliant: entry.breakCompliant ? 'Yes' : 'No',
-        breakPenalty: entry.breakPenaltyPay ? `$${Number(entry.breakPenaltyPay).toFixed(2)}` : '-',
-        status: entry.approvalStatus,
-      });
-    });
-
-    // Totals row
-    const totalRegularHrs = entries.reduce((sum: number, e: any) => sum + ((e.regularMinutes || 0) / 60), 0);
-    const totalOtHrs = entries.reduce((sum: number, e: any) => sum + ((e.overtimeMinutes || 0) / 60), 0);
-    const totalDtHrs = entries.reduce((sum: number, e: any) => sum + ((e.doubleTimeMinutes || 0) / 60), 0);
-    const totalHrs = entries.reduce((sum: number, e: any) => sum + ((e.durationMinutes || 0) / 60), 0);
-    const totalRegularPay = entries.reduce((sum: number, e: any) => sum + (e.regularPay ? Number(e.regularPay) : 0), 0);
-    const totalOtPay = entries.reduce((sum: number, e: any) => sum + (e.overtimePay ? Number(e.overtimePay) : 0), 0);
-    const totalDtPay = entries.reduce((sum: number, e: any) => sum + (e.doubleTimePay ? Number(e.doubleTimePay) : 0), 0);
-    const totalPay = entries.reduce((sum: number, e: any) => sum + (e.laborCost ? Number(e.laborCost) : 0), 0);
-    const totalBreakPenalty = entries.reduce((sum: number, e: any) => sum + (e.breakPenaltyPay ? Number(e.breakPenaltyPay) : 0), 0);
-
-    const totalsRow = sheet.addRow({
-      worker: 'TOTALS',
-      job: '',
-      date: '',
-      clockIn: '',
-      clockOut: '',
-      break: '',
-      regularHrs: totalRegularHrs.toFixed(2),
-      otHrs: totalOtHrs.toFixed(2),
-      dtHrs: totalDtHrs.toFixed(2),
-      totalHrs: totalHrs.toFixed(2),
-      rate: '',
-      regularPay: `$${totalRegularPay.toFixed(2)}`,
-      otPay: `$${totalOtPay.toFixed(2)}`,
-      dtPay: `$${totalDtPay.toFixed(2)}`,
-      totalPay: `$${totalPay.toFixed(2)}`,
-      breakCompliant: '',
-      breakPenalty: `$${totalBreakPenalty.toFixed(2)}`,
-      status: '',
-    });
-    totalsRow.font = { bold: true };
-    totalsRow.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFF3F4F6' },
-    };
-
-    const buffer = await workbook.xlsx.writeBuffer();
-    return Buffer.from(buffer);
-  }
-
-  // ============ CLOCK IN ============
 
   async clockIn(userId: string, companyId: string, dto: ClockInDto) {
     const activeEntry = await this.prisma.timeEntry.findFirst({
@@ -447,8 +76,6 @@ export class TimeEntriesService {
       }
     }
 
-    const { rate, isPrevailingWage } = await this.getEffectiveRate(companyId, userId, jobId || undefined);
-
     const timeEntry = await this.prisma.timeEntry.create({
       data: {
         companyId,
@@ -460,23 +87,21 @@ export class TimeEntriesService {
         isFlagged: flagReasons.length > 0,
         flagReason: flagReasons.join(', '),
         approvalStatus: 'PENDING',
-        hourlyRate: rate ? new Decimal(rate) : null,
-        isPrevailingWage,
       },
       include: {
         job: true,
-        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        user: { select: { id: true, name: true, phone: true } },
       },
     });
 
-    // Face verification
     if (user?.referencePhotoUrl && photoUrl !== 'placeholder.jpg') {
       try {
-        console.log('🔍 Starting face verification...');
-        const confidence = await this.awsService.compareFaces(user.referencePhotoUrl, photoUrl);
+        const confidence = await this.awsService.compareFaces(
+          user.referencePhotoUrl,
+          photoUrl,
+        );
 
         const matched = confidence >= 80;
-        console.log(`✅ Face verification result: ${confidence}% confidence, matched: ${matched}`);
 
         await this.prisma.faceVerificationLog.create({
           data: {
@@ -491,48 +116,67 @@ export class TimeEntriesService {
         });
 
         if (!matched) {
-          console.log('⚠️ Face mismatch - BLOCKING clock-in!');
-          await this.prisma.timeEntry.delete({ where: { id: timeEntry.id } });
+          await this.prisma.timeEntry.delete({
+            where: { id: timeEntry.id },
+          });
 
           const admins = await this.prisma.user.findMany({
-            where: { companyId, role: { in: ['ADMIN', 'OWNER'] }, email: { not: null } },
+            where: {
+              companyId,
+              role: { in: ['ADMIN', 'OWNER'] },
+              email: { not: null },
+            },
             select: { email: true },
           });
 
           for (const admin of admins) {
             if (admin.email) {
               try {
-                await this.emailService.sendBuddyPunchAlert(admin.email, user.name, user.phone, jobName, confidence, photoUrl);
+                await this.emailService.sendBuddyPunchAlert(
+                  admin.email,
+                  user.name,
+                  user.phone,
+                  jobName,
+                  confidence,
+                  photoUrl,
+                );
               } catch (emailErr) {
                 console.error('Failed to send buddy punch alert:', emailErr);
               }
             }
           }
 
-          throw new ForbiddenException(`Face verification failed. Confidence: ${confidence.toFixed(1)}%. Please try again or contact your supervisor.`);
+          throw new ForbiddenException(
+            `Face verification failed. Confidence: ${confidence.toFixed(1)}%. Please try again or contact your supervisor.`,
+          );
         }
       } catch (err) {
-        if (err instanceof ForbiddenException) throw err;
-        console.error('❌ Face verification error:', err);
-        const updatedFlagReasons = timeEntry.flagReason ? `${timeEntry.flagReason}, FACE_VERIFICATION_ERROR` : 'FACE_VERIFICATION_ERROR';
+        if (err instanceof ForbiddenException) {
+          throw err;
+        }
+
+        console.error('Face verification error:', err);
+        const updatedFlagReasons = timeEntry.flagReason
+          ? `${timeEntry.flagReason}, FACE_VERIFICATION_ERROR`
+          : 'FACE_VERIFICATION_ERROR';
+
         await this.prisma.timeEntry.update({
           where: { id: timeEntry.id },
-          data: { isFlagged: true, flagReason: updatedFlagReasons },
+          data: {
+            isFlagged: true,
+            flagReason: updatedFlagReasons,
+          },
         });
       }
     } else if (!user?.referencePhotoUrl && photoUrl !== 'placeholder.jpg') {
-      console.log('📸 No reference photo found. Setting first clock-in photo as reference...');
       await this.prisma.user.update({
         where: { id: userId },
         data: { referencePhotoUrl: photoUrl },
       });
-      console.log('✅ Reference photo set for user:', userId);
     }
 
     return timeEntry;
   }
-
-  // ============ CLOCK OUT ============
 
   async clockOut(userId: string, companyId: string, dto: ClockOutDto) {
     const activeEntry = await this.prisma.timeEntry.findFirst({
@@ -551,7 +195,7 @@ export class TimeEntriesService {
     const clockInTime = new Date(activeEntry.clockInTime);
     const clockOutTime = new Date();
     const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
-    const durationMinutes = totalMinutes - (activeEntry.breakMinutes || 0);
+    const workMinutes = totalMinutes - (activeEntry.breakMinutes || 0);
 
     let photoUrl = 'placeholder.jpg';
     if (dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
@@ -562,42 +206,14 @@ export class TimeEntriesService {
       }
     }
 
-    const hourlyRate = activeEntry.hourlyRate ? Number(activeEntry.hourlyRate) : 0;
-    const otSettings = await this.getOvertimeSettings(companyId);
-    const weeklyMinutesBefore = await this.getWeeklyMinutesWorked(userId, companyId, clockInTime);
-
-    const breakdown = hourlyRate > 0
-      ? this.calculateOvertimeBreakdown(durationMinutes, hourlyRate, otSettings, weeklyMinutesBefore)
-      : {
-          regularMinutes: durationMinutes,
-          overtimeMinutes: 0,
-          doubleTimeMinutes: 0,
-          regularPay: 0,
-          overtimePay: 0,
-          doubleTimePay: 0,
-          totalPay: 0,
-        };
-
-    // Check break compliance
-    const complianceSettings = await this.breakComplianceService.getComplianceSettings(companyId);
-    const complianceResult = this.breakComplianceService.checkCompliance(
-      durationMinutes,
-      activeEntry.breakMinutes || 0,
-      0, // Rest breaks - would need separate tracking
-      complianceSettings,
+    // Calculate overtime and labor cost
+    const overtimeCalc = await this.calculateOvertimeForEntry(
+      userId,
+      companyId,
+      activeEntry.jobId,
+      clockInTime,
+      workMinutes,
     );
-
-    let breakPenaltyPay = 0;
-    if (!complianceResult.isCompliant && hourlyRate > 0) {
-      breakPenaltyPay = complianceResult.totalPenaltyHours * hourlyRate;
-      await this.breakComplianceService.recordViolations(
-        companyId,
-        userId,
-        activeEntry.id,
-        complianceResult.violations,
-        hourlyRate,
-      );
-    }
 
     return this.prisma.timeEntry.update({
       where: { id: activeEntry.id },
@@ -605,39 +221,149 @@ export class TimeEntriesService {
         clockOutTime,
         clockOutLocation: `${dto.latitude},${dto.longitude}`,
         clockOutPhotoUrl: photoUrl,
-        durationMinutes,
-        regularMinutes: breakdown.regularMinutes,
-        overtimeMinutes: breakdown.overtimeMinutes,
-        doubleTimeMinutes: breakdown.doubleTimeMinutes,
-        regularPay: new Decimal(breakdown.regularPay),
-        overtimePay: new Decimal(breakdown.overtimePay),
-        doubleTimePay: new Decimal(breakdown.doubleTimePay),
-        laborCost: new Decimal(breakdown.totalPay),
-        breakCompliant: complianceResult.isCompliant,
-        breakPenaltyPay: breakPenaltyPay > 0 ? new Decimal(breakPenaltyPay) : null,
-        mealBreaksTaken: (activeEntry.breakMinutes || 0) >= 30 ? 1 : 0,
+        durationMinutes: workMinutes,
+        regularMinutes: overtimeCalc.regularMinutes,
+        overtimeMinutes: overtimeCalc.overtimeMinutes,
+        doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
+        effectiveRate: overtimeCalc.effectiveRate ? new Decimal(overtimeCalc.effectiveRate) : null,
+        laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
       },
       include: {
         job: true,
-        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        user: { select: { id: true, name: true, phone: true } },
       },
     });
   }
 
-  // ============ BREAKS ============
+  private async calculateOvertimeForEntry(
+    userId: string,
+    companyId: string,
+    jobId: string | null,
+    clockInTime: Date,
+    workMinutes: number,
+  ) {
+    // Get effective rate
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { hourlyRate: true },
+    });
+
+    let effectiveRate: number | null = null;
+
+    if (jobId) {
+      const jobRate = await this.prisma.workerJobRate.findFirst({
+        where: { userId, jobId },
+      });
+      if (jobRate) {
+        effectiveRate = Number(jobRate.hourlyRate);
+      } else {
+        const job = await this.prisma.job.findUnique({
+          where: { id: jobId },
+          select: { defaultHourlyRate: true },
+        });
+        if (job?.defaultHourlyRate) {
+          effectiveRate = Number(job.defaultHourlyRate);
+        }
+      }
+    }
+
+    if (!effectiveRate && user?.hourlyRate) {
+      effectiveRate = Number(user.hourlyRate);
+    }
+
+    // Get all entries for this day to calculate daily overtime
+    const dayStart = new Date(clockInTime);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(clockInTime);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    const dailyEntries = await this.prisma.timeEntry.findMany({
+      where: {
+        userId,
+        companyId,
+        clockInTime: { gte: dayStart, lte: dayEnd },
+        clockOutTime: { not: null },
+      },
+      select: { durationMinutes: true },
+    });
+
+    const previousDailyMinutes = dailyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+    const totalDailyMinutes = previousDailyMinutes + workMinutes;
+
+    // Calculate daily overtime (CA rules: >8hrs = 1.5x, >12hrs = 2x)
+    let regularMinutes = workMinutes;
+    let overtimeMinutes = 0;
+    let doubleTimeMinutes = 0;
+
+    const dailyRegularLimit = 8 * 60; // 480 minutes
+    const dailyOvertimeLimit = 12 * 60; // 720 minutes
+
+    if (totalDailyMinutes > dailyOvertimeLimit) {
+      // Some double time
+      const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
+      doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
+      
+      const remainingWork = workMinutes - doubleTimeMinutes;
+      if (previousDailyMinutes < dailyOvertimeLimit) {
+        const otMinutesInRange = Math.min(dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit), remainingWork);
+        overtimeMinutes = Math.max(0, otMinutesInRange);
+        regularMinutes = remainingWork - overtimeMinutes;
+      } else {
+        regularMinutes = 0;
+        overtimeMinutes = remainingWork;
+      }
+    } else if (totalDailyMinutes > dailyRegularLimit) {
+      // Some overtime, no double time
+      if (previousDailyMinutes >= dailyRegularLimit) {
+        overtimeMinutes = workMinutes;
+        regularMinutes = 0;
+      } else {
+        regularMinutes = Math.max(0, dailyRegularLimit - previousDailyMinutes);
+        overtimeMinutes = workMinutes - regularMinutes;
+      }
+    }
+
+    // Calculate labor cost
+    let laborCost: number | null = null;
+    if (effectiveRate) {
+      const regularPay = (regularMinutes / 60) * effectiveRate;
+      const overtimePay = (overtimeMinutes / 60) * effectiveRate * 1.5;
+      const doubleTimePay = (doubleTimeMinutes / 60) * effectiveRate * 2;
+      laborCost = regularPay + overtimePay + doubleTimePay;
+    }
+
+    return {
+      regularMinutes,
+      overtimeMinutes,
+      doubleTimeMinutes,
+      effectiveRate,
+      laborCost,
+    };
+  }
 
   async startBreak(userId: string) {
     const activeEntry = await this.prisma.timeEntry.findFirst({
       where: { userId, clockOutTime: null },
     });
 
-    if (!activeEntry) throw new BadRequestException('You must be clocked in to start a break.');
-    if (activeEntry.isOnBreak) throw new BadRequestException('You are already on a break.');
+    if (!activeEntry) {
+      throw new BadRequestException('You must be clocked in to start a break.');
+    }
+
+    if (activeEntry.isOnBreak) {
+      throw new BadRequestException('You are already on a break.');
+    }
 
     return this.prisma.timeEntry.update({
       where: { id: activeEntry.id },
-      data: { isOnBreak: true, breakStartTime: new Date() },
-      include: { job: true, user: { select: { id: true, name: true, phone: true } } },
+      data: {
+        isOnBreak: true,
+        breakStartTime: new Date(),
+      },
+      include: {
+        job: true,
+        user: { select: { id: true, name: true, phone: true } },
+      },
     });
   }
 
@@ -646,8 +372,13 @@ export class TimeEntriesService {
       where: { userId, clockOutTime: null },
     });
 
-    if (!activeEntry) throw new BadRequestException('You must be clocked in to end a break.');
-    if (!activeEntry.isOnBreak) throw new BadRequestException('You are not currently on a break.');
+    if (!activeEntry) {
+      throw new BadRequestException('You must be clocked in to end a break.');
+    }
+
+    if (!activeEntry.isOnBreak) {
+      throw new BadRequestException('You are not currently on a break.');
+    }
 
     const breakStartTime = new Date(activeEntry.breakStartTime!);
     const breakEndTime = new Date();
@@ -656,12 +387,17 @@ export class TimeEntriesService {
 
     return this.prisma.timeEntry.update({
       where: { id: activeEntry.id },
-      data: { isOnBreak: false, breakEndTime, breakMinutes: totalBreakMinutes },
-      include: { job: true, user: { select: { id: true, name: true, phone: true } } },
+      data: {
+        isOnBreak: false,
+        breakEndTime: breakEndTime,
+        breakMinutes: totalBreakMinutes,
+      },
+      include: {
+        job: true,
+        user: { select: { id: true, name: true, phone: true } },
+      },
     });
   }
-
-  // ============ QUERIES ============
 
   async getTimeEntries(companyId: string, filters?: any) {
     const where: any = {};
@@ -673,7 +409,11 @@ export class TimeEntriesService {
     if (filters?.startDate || filters?.endDate) {
       where.clockInTime = {};
       if (filters.startDate) where.clockInTime.gte = filters.startDate;
-      if (filters.endDate) where.clockInTime.lte = filters.endDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
     }
 
     return this.prisma.timeEntry.findMany({
@@ -700,22 +440,36 @@ export class TimeEntriesService {
     };
   }
 
-  // ============ APPROVAL WORKFLOW ============
+  // ============ APPROVAL WORKFLOW METHODS ============
 
   async getPendingApprovals(companyId: string) {
     return this.prisma.timeEntry.findMany({
-      where: { companyId, approvalStatus: 'PENDING', clockOutTime: { not: null } },
-      include: { user: { select: { id: true, name: true, phone: true, hourlyRate: true } }, job: true },
+      where: {
+        companyId,
+        approvalStatus: 'PENDING',
+        clockOutTime: { not: null },
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+      },
       orderBy: { clockInTime: 'desc' },
     });
   }
 
   async getApprovalStats(companyId: string) {
     const [pending, approved, rejected] = await Promise.all([
-      this.prisma.timeEntry.count({ where: { companyId, approvalStatus: 'PENDING', clockOutTime: { not: null } } }),
-      this.prisma.timeEntry.count({ where: { companyId, approvalStatus: 'APPROVED' } }),
-      this.prisma.timeEntry.count({ where: { companyId, approvalStatus: 'REJECTED' } }),
+      this.prisma.timeEntry.count({
+        where: { companyId, approvalStatus: 'PENDING', clockOutTime: { not: null } },
+      }),
+      this.prisma.timeEntry.count({
+        where: { companyId, approvalStatus: 'APPROVED' },
+      }),
+      this.prisma.timeEntry.count({
+        where: { companyId, approvalStatus: 'REJECTED' },
+      }),
     ]);
+
     return { pending, approved, rejected };
   }
 
@@ -725,14 +479,31 @@ export class TimeEntriesService {
       include: { user: { select: { id: true, name: true } } },
     });
 
-    if (!entry) throw new NotFoundException('Time entry not found');
-    if (entry.approvalStatus !== 'PENDING') throw new BadRequestException(`Entry is already ${entry.approvalStatus.toLowerCase()}`);
-    if (!entry.clockOutTime) throw new BadRequestException('Cannot approve an entry that is still active');
+    if (!entry) {
+      throw new NotFoundException('Time entry not found');
+    }
+
+    if (entry.approvalStatus !== 'PENDING') {
+      throw new BadRequestException(`Entry is already ${entry.approvalStatus.toLowerCase()}`);
+    }
+
+    if (!entry.clockOutTime) {
+      throw new BadRequestException('Cannot approve an entry that is still active');
+    }
 
     const updated = await this.prisma.timeEntry.update({
       where: { id: entryId },
-      data: { approvalStatus: 'APPROVED', approvedById: approverId, approvedAt: new Date(), rejectionReason: null },
-      include: { user: { select: { id: true, name: true, phone: true, hourlyRate: true } }, job: true, approvedBy: { select: { id: true, name: true } } },
+      data: {
+        approvalStatus: 'APPROVED',
+        approvedById: approverId,
+        approvedAt: new Date(),
+        rejectionReason: null,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+        approvedBy: { select: { id: true, name: true } },
+      },
     });
 
     await this.auditService.log({
@@ -741,7 +512,11 @@ export class TimeEntriesService {
       action: 'TIME_ENTRY_APPROVED',
       targetType: 'TIME_ENTRY',
       targetId: entryId,
-      details: { workerName: entry.user?.name, workerId: entry.userId, durationMinutes: entry.durationMinutes, laborCost: entry.laborCost ? Number(entry.laborCost) : null },
+      details: {
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        durationMinutes: entry.durationMinutes,
+      },
     });
 
     return updated;
@@ -753,13 +528,27 @@ export class TimeEntriesService {
       include: { user: { select: { id: true, name: true } } },
     });
 
-    if (!entry) throw new NotFoundException('Time entry not found');
-    if (entry.approvalStatus !== 'PENDING') throw new BadRequestException(`Entry is already ${entry.approvalStatus.toLowerCase()}`);
+    if (!entry) {
+      throw new NotFoundException('Time entry not found');
+    }
+
+    if (entry.approvalStatus !== 'PENDING') {
+      throw new BadRequestException(`Entry is already ${entry.approvalStatus.toLowerCase()}`);
+    }
 
     const updated = await this.prisma.timeEntry.update({
       where: { id: entryId },
-      data: { approvalStatus: 'REJECTED', approvedById: approverId, approvedAt: new Date(), rejectionReason: reason || 'No reason provided' },
-      include: { user: { select: { id: true, name: true, phone: true } }, job: true, approvedBy: { select: { id: true, name: true } } },
+      data: {
+        approvalStatus: 'REJECTED',
+        approvedById: approverId,
+        approvedAt: new Date(),
+        rejectionReason: reason || 'No reason provided',
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+        approvedBy: { select: { id: true, name: true } },
+      },
     });
 
     await this.auditService.log({
@@ -768,14 +557,24 @@ export class TimeEntriesService {
       action: 'TIME_ENTRY_REJECTED',
       targetType: 'TIME_ENTRY',
       targetId: entryId,
-      details: { workerName: entry.user?.name, workerId: entry.userId, durationMinutes: entry.durationMinutes, rejectionReason: reason },
+      details: {
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        durationMinutes: entry.durationMinutes,
+        rejectionReason: reason,
+      },
     });
 
     return updated;
   }
 
   async bulkApprove(entryIds: string[], approverId: string, companyId: string) {
-    const results = { approved: 0, failed: 0, errors: [] as string[] };
+    const results = {
+      approved: 0,
+      failed: 0,
+      errors: [] as string[],
+    };
+
     for (const entryId of entryIds) {
       try {
         await this.approveEntry(entryId, approverId, companyId);
@@ -785,11 +584,17 @@ export class TimeEntriesService {
         results.errors.push(`${entryId}: ${err.message}`);
       }
     }
+
     return results;
   }
 
   async bulkReject(entryIds: string[], approverId: string, companyId: string, reason: string) {
-    const results = { rejected: 0, failed: 0, errors: [] as string[] };
+    const results = {
+      rejected: 0,
+      failed: 0,
+      errors: [] as string[],
+    };
+
     for (const entryId of entryIds) {
       try {
         await this.rejectEntry(entryId, approverId, companyId, reason);
@@ -799,63 +604,470 @@ export class TimeEntriesService {
         results.errors.push(`${entryId}: ${err.message}`);
       }
     }
+
     return results;
   }
 
-  // ============ OVERTIME ANALYTICS ============
+  async createManualEntry(companyId: string, createdById: string, dto: CreateManualEntryDto) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: dto.userId, companyId },
+    });
 
-  async getOvertimeSummary(companyId: string, startDate?: Date, endDate?: Date) {
+    if (!user) {
+      throw new NotFoundException('Worker not found');
+    }
+
+    if (dto.jobId) {
+      const job = await this.prisma.job.findFirst({
+        where: { id: dto.jobId, companyId },
+      });
+      if (!job) {
+        throw new NotFoundException('Job not found');
+      }
+    }
+
+    const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00`);
+    const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00`);
+
+    if (clockOutTime <= clockInTime) {
+      throw new BadRequestException('Clock out time must be after clock in time');
+    }
+
+    const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
+    const workMinutes = totalMinutes - (dto.breakMinutes || 0);
+
+    const overtimeCalc = await this.calculateOvertimeForEntry(
+      dto.userId,
+      companyId,
+      dto.jobId || null,
+      clockInTime,
+      workMinutes,
+    );
+
+    const entry = await this.prisma.timeEntry.create({
+      data: {
+        companyId,
+        userId: dto.userId,
+        jobId: dto.jobId || null,
+        clockInTime,
+        clockOutTime,
+        durationMinutes: workMinutes,
+        breakMinutes: dto.breakMinutes || 0,
+        notes: dto.notes,
+        approvalStatus: 'PENDING',
+        regularMinutes: overtimeCalc.regularMinutes,
+        overtimeMinutes: overtimeCalc.overtimeMinutes,
+        doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
+        effectiveRate: overtimeCalc.effectiveRate ? new Decimal(overtimeCalc.effectiveRate) : null,
+        laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+      },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId: createdById,
+      action: 'TIME_ENTRY_APPROVED',
+      targetType: 'TIME_ENTRY',
+      targetId: entry.id,
+      details: {
+        type: 'MANUAL_ENTRY',
+        workerName: user.name,
+        durationMinutes: workMinutes,
+      },
+    });
+
+    return entry;
+  }
+
+  // ============ OVERTIME SUMMARY ============
+
+  async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
     const where: any = { companyId, clockOutTime: { not: null } };
-    if (startDate || endDate) {
+
+    if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
-      if (startDate) where.clockInTime.gte = startDate;
-      if (endDate) where.clockInTime.lte = endDate;
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
     }
 
     const entries = await this.prisma.timeEntry.findMany({
       where,
-      include: { user: { select: { id: true, name: true } }, job: { select: { id: true, name: true } } },
+      include: {
+        user: { select: { id: true, name: true } },
+      },
     });
+
+    const byWorker: Record<string, any> = {};
+
+    for (const entry of entries) {
+      const workerId = entry.userId;
+      if (!byWorker[workerId]) {
+        byWorker[workerId] = {
+          id: workerId,
+          name: entry.user?.name || 'Unknown',
+          regularMinutes: 0,
+          overtimeMinutes: 0,
+          doubleTimeMinutes: 0,
+          regularPay: 0,
+          overtimePay: 0,
+          doubleTimePay: 0,
+          totalPay: 0,
+        };
+      }
+
+      const rate = entry.effectiveRate ? Number(entry.effectiveRate) : 0;
+      byWorker[workerId].regularMinutes += entry.regularMinutes || 0;
+      byWorker[workerId].overtimeMinutes += entry.overtimeMinutes || 0;
+      byWorker[workerId].doubleTimeMinutes += entry.doubleTimeMinutes || 0;
+      byWorker[workerId].regularPay += ((entry.regularMinutes || 0) / 60) * rate;
+      byWorker[workerId].overtimePay += ((entry.overtimeMinutes || 0) / 60) * rate * 1.5;
+      byWorker[workerId].doubleTimePay += ((entry.doubleTimeMinutes || 0) / 60) * rate * 2;
+      byWorker[workerId].totalPay += entry.laborCost ? Number(entry.laborCost) : 0;
+    }
 
     const totals = {
-      regularMinutes: 0, overtimeMinutes: 0, doubleTimeMinutes: 0,
-      regularPay: 0, overtimePay: 0, doubleTimePay: 0, totalPay: 0,
+      regularHours: 0,
+      overtimeHours: 0,
+      doubleTimeHours: 0,
+      regularPay: 0,
+      overtimePay: 0,
+      doubleTimePay: 0,
+      totalPay: 0,
     };
 
-    entries.forEach(e => {
-      totals.regularMinutes += e.regularMinutes || 0;
-      totals.overtimeMinutes += e.overtimeMinutes || 0;
-      totals.doubleTimeMinutes += e.doubleTimeMinutes || 0;
-      totals.regularPay += e.regularPay ? Number(e.regularPay) : 0;
-      totals.overtimePay += e.overtimePay ? Number(e.overtimePay) : 0;
-      totals.doubleTimePay += e.doubleTimePay ? Number(e.doubleTimePay) : 0;
-      totals.totalPay += e.laborCost ? Number(e.laborCost) : 0;
-    });
-
-    const byWorker = entries.reduce((acc, e) => {
-      const workerId = e.userId;
-      if (!acc[workerId]) {
-        acc[workerId] = { id: workerId, name: e.user?.name || 'Unknown', regularMinutes: 0, overtimeMinutes: 0, doubleTimeMinutes: 0, totalPay: 0 };
-      }
-      acc[workerId].regularMinutes += e.regularMinutes || 0;
-      acc[workerId].overtimeMinutes += e.overtimeMinutes || 0;
-      acc[workerId].doubleTimeMinutes += e.doubleTimeMinutes || 0;
-      acc[workerId].totalPay += e.laborCost ? Number(e.laborCost) : 0;
-      return acc;
-    }, {} as Record<string, any>);
+    for (const worker of Object.values(byWorker)) {
+      totals.regularHours += worker.regularMinutes / 60;
+      totals.overtimeHours += worker.overtimeMinutes / 60;
+      totals.doubleTimeHours += worker.doubleTimeMinutes / 60;
+      totals.regularPay += worker.regularPay;
+      totals.overtimePay += worker.overtimePay;
+      totals.doubleTimePay += worker.doubleTimePay;
+      totals.totalPay += worker.totalPay;
+    }
 
     return {
-      totals: {
-        regularHours: Math.round(totals.regularMinutes / 60 * 100) / 100,
-        overtimeHours: Math.round(totals.overtimeMinutes / 60 * 100) / 100,
-        doubleTimeHours: Math.round(totals.doubleTimeMinutes / 60 * 100) / 100,
-        regularPay: Math.round(totals.regularPay * 100) / 100,
-        overtimePay: Math.round(totals.overtimePay * 100) / 100,
-        doubleTimePay: Math.round(totals.doubleTimePay * 100) / 100,
-        totalPay: Math.round(totals.totalPay * 100) / 100,
-      },
       byWorker: Object.values(byWorker),
-      entryCount: entries.length,
+      totals,
     };
+  }
+
+  // ============ EXPORT METHODS ============
+
+  async exportToExcel(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }) {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+    });
+
+    const where: any = { companyId };
+
+    if (filters.userId) {
+      where.userId = filters.userId;
+    }
+
+    if (filters.startDate || filters.endDate) {
+      where.clockInTime = {};
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        job: { select: { id: true, name: true, address: true } },
+      },
+      orderBy: [{ userId: 'asc' }, { clockInTime: 'asc' }],
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = company?.name || 'Punchd';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Timesheet');
+
+    // Header
+    sheet.mergeCells('A1:L1');
+    sheet.getCell('A1').value = company?.name || 'Company Timesheet';
+    sheet.getCell('A1').font = { size: 18, bold: true };
+
+    sheet.mergeCells('A2:L2');
+    const startStr = filters.startDate
+      ? new Date(filters.startDate).toLocaleDateString()
+      : 'All Time';
+    const endStr = filters.endDate
+      ? new Date(filters.endDate).toLocaleDateString()
+      : 'Present';
+    sheet.getCell('A2').value = `Period: ${startStr} - ${endStr}`;
+
+    // Column headers
+    const headers = ['Worker', 'Date', 'Job Site', 'Clock In', 'Clock Out', 'Break', 'Regular', 'OT', 'DT', 'Total', 'Rate', 'Amount', 'Status'];
+    sheet.addRow([]);
+    const headerRow = sheet.addRow(headers);
+    headerRow.font = { bold: true };
+    headerRow.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+      cell.border = { bottom: { style: 'thin' } };
+    });
+
+    // Data rows
+    for (const entry of entries) {
+      sheet.addRow([
+        entry.user?.name || 'Unknown',
+        entry.clockInTime ? new Date(entry.clockInTime).toLocaleDateString() : '-',
+        entry.job?.name || 'Unassigned',
+        entry.clockInTime ? new Date(entry.clockInTime).toLocaleTimeString() : '-',
+        entry.clockOutTime ? new Date(entry.clockOutTime).toLocaleTimeString() : 'Active',
+        entry.breakMinutes || 0,
+        ((entry.regularMinutes || 0) / 60).toFixed(2),
+        ((entry.overtimeMinutes || 0) / 60).toFixed(2),
+        ((entry.doubleTimeMinutes || 0) / 60).toFixed(2),
+        ((entry.durationMinutes || 0) / 60).toFixed(2),
+        entry.effectiveRate ? `$${Number(entry.effectiveRate).toFixed(2)}` : '-',
+        entry.laborCost ? `$${Number(entry.laborCost).toFixed(2)}` : '-',
+        entry.approvalStatus || 'PENDING',
+      ]);
+    }
+
+    // Auto-width columns
+    sheet.columns.forEach((column) => {
+      column.width = 15;
+    });
+
+    return workbook.xlsx.writeBuffer() as Promise<Buffer>;
+  }
+
+  async exportToPdf(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }) {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+    });
+
+    const where: any = { companyId };
+
+    if (filters.userId) {
+      where.userId = filters.userId;
+    }
+
+    if (filters.startDate || filters.endDate) {
+      where.clockInTime = {};
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        job: { select: { id: true, name: true, address: true } },
+      },
+      orderBy: [{ userId: 'asc' }, { clockInTime: 'asc' }],
+    });
+
+    const doc = new PDFDocument({
+      size: 'LETTER',
+      layout: 'landscape',
+      margin: 40,
+    });
+
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+
+    const startStr = filters.startDate
+      ? new Date(filters.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'All Time';
+    const endStr = filters.endDate
+      ? new Date(filters.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'Present';
+
+    // Header
+    doc.fontSize(20).font('Helvetica-Bold').text(company?.name || 'Company Timesheet', 40, 40);
+
+    if (company?.address) {
+      doc.fontSize(10).font('Helvetica').text(
+        `${company.address}${company.city ? ', ' + company.city : ''}${company.state ? ', ' + company.state : ''} ${company.zip || ''}`,
+        40, 65
+      );
+    }
+
+    doc.fontSize(14).font('Helvetica-Bold').text('TIMESHEET REPORT', 40, 90);
+    doc.fontSize(10).font('Helvetica').text(`Period: ${startStr} - ${endStr}`, 40, 110);
+    doc.text(`Generated: ${new Date().toLocaleString('en-US')}`, 40, 124);
+
+    // Group by worker
+    const workerGroups: Record<string, typeof entries> = {};
+    for (const entry of entries) {
+      const workerId = entry.userId;
+      if (!workerGroups[workerId]) {
+        workerGroups[workerId] = [];
+      }
+      workerGroups[workerId].push(entry);
+    }
+
+    let yPos = 155;
+    const pageHeight = 612;
+    const marginBottom = 60;
+
+    const drawTableHeader = (y: number) => {
+      doc.font('Helvetica-Bold').fontSize(8);
+      doc.rect(40, y, 712, 18).fill('#e8e8e8').stroke('#cccccc');
+      doc.fillColor('#000000');
+      doc.text('Date', 45, y + 5, { width: 55 });
+      doc.text('Job Site', 100, y + 5, { width: 120 });
+      doc.text('In', 220, y + 5, { width: 50 });
+      doc.text('Out', 270, y + 5, { width: 50 });
+      doc.text('Break', 320, y + 5, { width: 35 });
+      doc.text('Reg', 355, y + 5, { width: 35 });
+      doc.text('OT', 390, y + 5, { width: 35 });
+      doc.text('DT', 425, y + 5, { width: 35 });
+      doc.text('Total', 460, y + 5, { width: 40 });
+      doc.text('Rate', 500, y + 5, { width: 45 });
+      doc.text('Amount', 545, y + 5, { width: 55 });
+      doc.text('Status', 600, y + 5, { width: 50 });
+      return y + 18;
+    };
+
+    for (const [workerId, workerEntries] of Object.entries(workerGroups)) {
+      const worker = workerEntries[0]?.user;
+
+      if (yPos > pageHeight - marginBottom - 100) {
+        doc.addPage();
+        yPos = 40;
+      }
+
+      // Worker header
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('#333333');
+      doc.text(`${worker?.name || 'Unknown Worker'}`, 40, yPos);
+      doc.font('Helvetica').fontSize(9).fillColor('#666666');
+      doc.text(`Rate: $${worker?.hourlyRate ? Number(worker.hourlyRate).toFixed(2) : '0.00'}/hr`, 300, yPos);
+      yPos += 18;
+
+      yPos = drawTableHeader(yPos);
+
+      let workerTotalRegular = 0;
+      let workerTotalOT = 0;
+      let workerTotalDT = 0;
+      let workerTotalPay = 0;
+
+      doc.font('Helvetica').fontSize(8).fillColor('#000000');
+      let rowIndex = 0;
+
+      for (const entry of workerEntries) {
+        if (yPos > pageHeight - marginBottom) {
+          doc.addPage();
+          yPos = 40;
+          yPos = drawTableHeader(yPos);
+        }
+
+        if (rowIndex % 2 === 0) {
+          doc.rect(40, yPos, 712, 16).fill('#fafafa');
+        }
+        doc.fillColor('#000000');
+
+        const date = entry.clockInTime
+          ? new Date(entry.clockInTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : '-';
+        const clockIn = entry.clockInTime
+          ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+          : '-';
+        const clockOut = entry.clockOutTime
+          ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+          : 'Active';
+
+        const regularHrs = ((entry.regularMinutes || 0) / 60).toFixed(1);
+        const otHrs = ((entry.overtimeMinutes || 0) / 60).toFixed(1);
+        const dtHrs = ((entry.doubleTimeMinutes || 0) / 60).toFixed(1);
+        const totalHrs = ((entry.durationMinutes || 0) / 60).toFixed(1);
+        const rate = entry.effectiveRate ? `$${Number(entry.effectiveRate).toFixed(2)}` : '-';
+        const amount = entry.laborCost ? `$${Number(entry.laborCost).toFixed(2)}` : '-';
+
+        workerTotalRegular += (entry.regularMinutes || 0) / 60;
+        workerTotalOT += (entry.overtimeMinutes || 0) / 60;
+        workerTotalDT += (entry.doubleTimeMinutes || 0) / 60;
+        workerTotalPay += entry.laborCost ? Number(entry.laborCost) : 0;
+
+        doc.text(date, 45, yPos + 4, { width: 55 });
+        doc.text((entry.job?.name || 'Unassigned').substring(0, 18), 100, yPos + 4, { width: 120 });
+        doc.text(clockIn, 220, yPos + 4, { width: 50 });
+        doc.text(clockOut, 270, yPos + 4, { width: 50 });
+        doc.text(`${entry.breakMinutes || 0}m`, 320, yPos + 4, { width: 35 });
+        doc.text(regularHrs, 355, yPos + 4, { width: 35 });
+        doc.text(otHrs, 390, yPos + 4, { width: 35 });
+        doc.text(dtHrs, 425, yPos + 4, { width: 35 });
+        doc.text(totalHrs, 460, yPos + 4, { width: 40 });
+        doc.text(rate, 500, yPos + 4, { width: 45 });
+        doc.text(amount, 545, yPos + 4, { width: 55 });
+
+        const status = entry.approvalStatus || 'PENDING';
+        const statusColor = status === 'APPROVED' ? '#22c55e' : status === 'REJECTED' ? '#ef4444' : '#f59e0b';
+        doc.fillColor(statusColor).text(status, 600, yPos + 4, { width: 50 });
+        doc.fillColor('#000000');
+
+        yPos += 16;
+        rowIndex++;
+      }
+
+      // Worker totals
+      doc.rect(40, yPos, 712, 20).fill('#d4d4d4').stroke('#999999');
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
+      doc.text('TOTAL', 45, yPos + 6);
+      doc.text(workerTotalRegular.toFixed(1), 355, yPos + 6, { width: 35 });
+      doc.text(workerTotalOT.toFixed(1), 390, yPos + 6, { width: 35 });
+      doc.text(workerTotalDT.toFixed(1), 425, yPos + 6, { width: 35 });
+      doc.text((workerTotalRegular + workerTotalOT + workerTotalDT).toFixed(1), 460, yPos + 6, { width: 40 });
+      doc.text(`$${workerTotalPay.toFixed(2)}`, 545, yPos + 6, { width: 55 });
+      yPos += 28;
+
+      // Signature lines
+      if (yPos < pageHeight - marginBottom - 40) {
+        doc.font('Helvetica').fontSize(8).fillColor('#666666');
+        doc.text('Worker Signature: _______________________________', 45, yPos);
+        doc.text('Date: ____________', 300, yPos);
+        doc.text('Manager: _______________________________', 450, yPos);
+        yPos += 25;
+      }
+    }
+
+    // Grand totals
+    if (Object.keys(workerGroups).length > 0) {
+      if (yPos > pageHeight - marginBottom - 50) {
+        doc.addPage();
+        yPos = 40;
+      }
+
+      let grandTotalHours = 0;
+      let grandTotalPay = 0;
+      for (const entry of entries) {
+        grandTotalHours += (entry.durationMinutes || 0) / 60;
+        grandTotalPay += entry.laborCost ? Number(entry.laborCost) : 0;
+      }
+
+      doc.rect(40, yPos, 712, 28).fill('#333333');
+      doc.font('Helvetica-Bold').fontSize(12).fillColor('#ffffff');
+      doc.text(`GRAND TOTAL: ${grandTotalHours.toFixed(1)} Hours | $${grandTotalPay.toFixed(2)}`, 50, yPos + 8);
+      doc.text(`${entries.length} Entries | ${Object.keys(workerGroups).length} Workers`, 500, yPos + 8);
+    }
+
+    doc.end();
+
+    return new Promise<Buffer>((resolve) => {
+      doc.on('end', () => {
+        resolve(Buffer.concat(chunks));
+      });
+    });
   }
 }
