@@ -29,4 +29,35 @@ export class CreateUserDto {
   @IsNumber()
   @IsOptional()
   hourlyRate?: number;
+
+  // WH-347 Fields
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  address?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  city?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  state?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  zip?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  lastFourSSN?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  tradeClassification?: string;
 }
