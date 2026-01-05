@@ -12,8 +12,8 @@ export class AuthService {
   private twilioClient: any;
   private verifyServiceSid: string | undefined;
 
-  // Rate limit settings
-  private readonly MAX_OTP_PER_HOUR = 3;
+  // Rate limit settings 
+  private readonly MAX_OTP_PER_HOUR = 10;
 
   constructor(
     private prisma: PrismaService,
