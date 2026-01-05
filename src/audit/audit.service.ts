@@ -1,33 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-
-export type AuditAction = 
-  | 'USER_CREATED'
-  | 'USER_UPDATED'
-  | 'USER_APPROVED'
-  | 'USER_REJECTED'
-  | 'USER_DEACTIVATED'
-  | 'USER_PHONE_CHANGED'
-  | 'USER_ROLE_CHANGED'
-  | 'JOB_CREATED'
-  | 'JOB_UPDATED'
-  | 'JOB_DELETED'
-  | 'SHIFT_CREATED'
-  | 'SHIFT_UPDATED'
-  | 'SHIFT_DELETED'
-  | 'COMPANY_SETTINGS_UPDATED'
-  | 'LOGIN'
-  | 'PASSWORD_RESET'
-  | 'TIME_ENTRY_APPROVED'
-  | 'TIME_ENTRY_REJECTED'
-  | 'PAY_RATE_UPDATED'
-  | 'OVERTIME_SETTINGS_UPDATED';
+import { AuditAction } from '@prisma/client';
 
 @Injectable()
 export class AuditService {
   constructor(private prisma: PrismaService) {}
 
-  async log(params: {
+  async log(data: {
     companyId: string;
     userId?: string;
     action: AuditAction;
@@ -36,67 +15,48 @@ export class AuditService {
     details?: Record<string, any>;
     ipAddress?: string;
   }) {
-    try {
-      await this.prisma.auditLog.create({
-        data: {
-          companyId: params.companyId,
-          userId: params.userId,
-          action: params.action,
-          targetType: params.targetType,
-          targetId: params.targetId,
-          details: params.details || {},
-          ipAddress: params.ipAddress,
-        },
-      });
-      console.log(`📝 Audit: ${params.action} by ${params.userId || 'system'} on ${params.targetType}:${params.targetId}`);
-    } catch (err) {
-      console.error('Failed to create audit log:', err);
-    }
+    return this.prisma.auditLog.create({
+      data: {
+        companyId: data.companyId,
+        userId: data.userId,
+        action: data.action,
+        targetType: data.targetType,
+        targetId: data.targetId,
+        details: data.details || {},
+        ipAddress: data.ipAddress,
+      },
+    });
   }
 
-  async getAuditLogs(
-    companyId: string,
-    options?: {
-      limit?: number;
-      offset?: number;
-      action?: AuditAction;
-      userId?: string;
-      targetId?: string;
-      startDate?: Date;
-      endDate?: Date;
-    }
-  ) {
+  async findAll(companyId: string, filters?: {
+    action?: AuditAction;
+    userId?: string;
+    startDate?: Date;
+    endDate?: Date;
+    limit?: number;
+  }) {
     const where: any = { companyId };
 
-    if (options?.action) {
-      where.action = options.action;
-    }
-    if (options?.userId) {
-      where.userId = options.userId;
-    }
-    if (options?.targetId) {
-      where.targetId = options.targetId;
-    }
-    if (options?.startDate || options?.endDate) {
+    if (filters?.action) where.action = filters.action;
+    if (filters?.userId) where.userId = filters.userId;
+    
+    if (filters?.startDate || filters?.endDate) {
       where.createdAt = {};
-      if (options?.startDate) {
-        where.createdAt.gte = options.startDate;
-      }
-      if (options?.endDate) {
-        where.createdAt.lte = options.endDate;
-      }
+      if (filters.startDate) where.createdAt.gte = filters.startDate;
+      if (filters.endDate) where.createdAt.lte = filters.endDate;
     }
 
-    const [logs, total] = await Promise.all([
-      this.prisma.auditLog.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        take: options?.limit || 50,
-        skip: options?.offset || 0,
-      }),
-      this.prisma.auditLog.count({ where }),
-    ]);
+    return this.prisma.auditLog.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: filters?.limit || 100,
+    });
+  }
 
-    return { logs, total };
+  async findByTarget(targetType: string, targetId: string) {
+    return this.prisma.auditLog.findMany({
+      where: { targetType, targetId },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 }
