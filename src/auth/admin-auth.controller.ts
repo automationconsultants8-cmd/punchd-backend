@@ -30,6 +30,32 @@ export class AdminAuthController {
     return code;
   }
 
+  // TEMPORARY - List all admin emails (DELETE AFTER FINDING YOUR EMAIL)
+  @Get('list-admins')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'List all admin users - TEMPORARY' })
+  async listAdmins() {
+    const users = await this.prisma.user.findMany({
+      where: {
+        role: { in: ['ADMIN', 'OWNER', 'MANAGER'] },
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        createdAt: true,
+        company: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+    
+    return users;
+  }
+
   @Post('signup')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register new company and owner account' })
@@ -80,7 +106,6 @@ export class AdminAuthController {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // Set trial to 14 days from now
     const trialEndsAt = new Date();
     trialEndsAt.setDate(trialEndsAt.getDate() + 14);
 
@@ -254,8 +279,7 @@ export class AdminAuthController {
     });
 
     if (!user) {
-      console.log(`⚠️ Password reset requested for unknown email: ${email}`);
-      return { success: true, message: 'If an account exists, a reset link has been sent.' };
+      throw new BadRequestException('No account found with this email address');
     }
 
     const token = crypto.randomBytes(32).toString('hex');
@@ -282,11 +306,11 @@ export class AdminAuthController {
         subject: "Punch'd - Reset Your Password",
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #a855f7;">Reset Your Password</h2>
+            <h2 style="color: #C9A227;">Reset Your Password</h2>
             <p>Hi ${user.name},</p>
             <p>You requested to reset your password. Click the button below to set a new password:</p>
             <p style="margin: 30px 0;">
-              <a href="${resetUrl}" style="background: linear-gradient(135deg, #a855f7, #ec4899); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold;">
+              <a href="${resetUrl}" style="background: linear-gradient(135deg, #C9A227, #D4AF37); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold;">
                 Reset Password
               </a>
             </p>
@@ -299,11 +323,11 @@ export class AdminAuthController {
       });
 
       console.log(`📧 Password reset email sent to: ${user.email}`);
+      return { success: true, message: 'Password reset email sent!' };
     } catch (err) {
       console.error('❌ Failed to send password reset email:', err.message);
+      throw new BadRequestException('Failed to send email. Please try again or contact support.');
     }
-
-    return { success: true, message: 'If an account exists, a reset link has been sent.' };
   }
 
   @Post('reset-password')
