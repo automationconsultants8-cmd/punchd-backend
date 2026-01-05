@@ -28,7 +28,8 @@ export class AuditService {
     });
   }
 
-  async findAll(companyId: string, filters?: {
+  // Keep original method name for existing controller
+  async getAuditLogs(companyId: string, filters?: {
     action?: AuditAction;
     userId?: string;
     startDate?: Date;
@@ -51,6 +52,17 @@ export class AuditService {
       orderBy: { createdAt: 'desc' },
       take: filters?.limit || 100,
     });
+  }
+
+  // Alias for consistency
+  async findAll(companyId: string, filters?: {
+    action?: AuditAction;
+    userId?: string;
+    startDate?: Date;
+    endDate?: Date;
+    limit?: number;
+  }) {
+    return this.getAuditLogs(companyId, filters);
   }
 
   async findByTarget(targetType: string, targetId: string) {
