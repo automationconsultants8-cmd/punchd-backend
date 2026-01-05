@@ -16,6 +16,9 @@ import { FeaturesModule } from './features/features.module';
 import { BreakComplianceModule } from './break-compliance/break-compliance.module';
 import { CertifiedPayrollModule } from './certified-payroll/certified-payroll.module';
 import { CompanyModule } from './company/company.module';
+import { ShiftRequestsModule } from './shift-requests/shift-requests.module';
+import { TimeOffModule } from './time-off/time-off.module';
+import { MessagesModule } from './messages/messages.module';
 
 @Module({
   imports: [
@@ -39,6 +42,9 @@ import { CompanyModule } from './company/company.module';
     StripeModule,
     CertifiedPayrollModule,
     CompanyModule,
+    ShiftRequestsModule,
+    TimeOffModule,
+    MessagesModule,
   ],
 })
 export class AppModule {}
