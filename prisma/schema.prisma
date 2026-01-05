@@ -38,6 +38,9 @@ model Company {
   workerJobRates        WorkerJobRate[]
   breakViolations       BreakViolation[]
   certifiedPayrolls     CertifiedPayroll[]
+  shiftRequests         ShiftRequest[]
+  timeOffRequests       TimeOffRequest[]
+  messages              Message[]
 
   @@map("companies")
 }
@@ -89,6 +92,19 @@ model User {
   approvedTimeEntries TimeEntry[] @relation("ApprovedTimeEntries")
   jobRates            WorkerJobRate[]
   breakViolations     BreakViolation[]
+  
+  // Phase 1: Shift Requests
+  shiftRequestsCreated    ShiftRequest[] @relation("ShiftRequestRequester")
+  shiftRequestsAsTarget   ShiftRequest[] @relation("ShiftRequestSwapTarget")
+  shiftRequestsReviewed   ShiftRequest[] @relation("ShiftRequestReviewer")
+  
+  // Phase 1: Time Off Requests
+  timeOffRequestsCreated  TimeOffRequest[] @relation("TimeOffRequester")
+  timeOffRequestsReviewed TimeOffRequest[] @relation("TimeOffReviewer")
+  
+  // Phase 1: Messages
+  messagesSent            Message[] @relation("MessageSender")
+  messagesReceived        Message[] @relation("MessageRecipient")
 
   @@unique([companyId, phone])
   @@index([companyId, email])
@@ -379,12 +395,146 @@ model Shift {
   company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   job           Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  
+  // Phase 1: Shift Requests
+  shiftRequests ShiftRequest[]
 
   @@index([companyId, shiftDate])
   @@index([userId, shiftDate])
   @@index([jobId, shiftDate])
   @@map("shifts")
 }
+
+// =============================================
+// PHASE 1: SHIFT REQUEST SYSTEM
+// =============================================
+
+enum ShiftRequestType {
+  DROP
+  SWAP
+}
+
+enum ShiftRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  CANCELLED
+}
+
+model ShiftRequest {
+  id              String             @id @default(uuid())
+  companyId       String
+  shiftId         String
+  requesterId     String
+  requestType     ShiftRequestType
+  reason          String
+  
+  // For SWAP requests only
+  swapTargetId    String?            // The worker they want to swap with
+  swapShiftId     String?            // The shift they want to swap for (optional)
+  
+  // Status & Review
+  status          ShiftRequestStatus @default(PENDING)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewerNotes   String?
+  
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  company         Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shift           Shift              @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  requester       User               @relation("ShiftRequestRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  swapTarget      User?              @relation("ShiftRequestSwapTarget", fields: [swapTargetId], references: [id], onDelete: SetNull)
+  reviewedBy      User?              @relation("ShiftRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@index([requesterId, status])
+  @@index([shiftId])
+  @@map("shift_requests")
+}
+
+// =============================================
+// PHASE 1: TIME OFF REQUEST SYSTEM
+// =============================================
+
+enum TimeOffType {
+  PTO
+  SICK
+  UNPAID
+  BEREAVEMENT
+  JURY_DUTY
+  OTHER
+}
+
+enum TimeOffStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  CANCELLED
+}
+
+model TimeOffRequest {
+  id              String         @id @default(uuid())
+  companyId       String
+  requesterId     String
+  timeOffType     TimeOffType
+  startDate       DateTime       @db.Date
+  endDate         DateTime       @db.Date
+  reason          String?
+  
+  // Status & Review
+  status          TimeOffStatus  @default(PENDING)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewerNotes   String?
+  
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  company         Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requester       User           @relation("TimeOffRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  reviewedBy      User?          @relation("TimeOffReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@index([requesterId, status])
+  @@index([companyId, startDate, endDate])
+  @@map("time_off_requests")
+}
+
+// =============================================
+// PHASE 1: IN-APP MESSAGING
+// =============================================
+
+model Message {
+  id            String    @id @default(uuid())
+  companyId     String
+  senderId      String
+  recipientId   String?   // Null = broadcast to admins
+  subject       String?
+  body          String
+  isRead        Boolean   @default(false)
+  readAt        DateTime?
+  
+  // Optional link to related entities
+  shiftRequestId    String?
+  timeOffRequestId  String?
+  
+  createdAt     DateTime  @default(now())
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sender        User      @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient     User?     @relation("MessageRecipient", fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, recipientId, isRead])
+  @@index([senderId, createdAt])
+  @@index([recipientId, createdAt])
+  @@map("messages")
+}
+
+// =============================================
+// AUDIT LOG (Updated with new actions)
+// =============================================
 
 enum AuditAction {
   USER_CREATED
@@ -410,6 +560,16 @@ enum AuditAction {
   BREAK_VIOLATION_WAIVED
   CERTIFIED_PAYROLL_GENERATED
   CERTIFIED_PAYROLL_SUBMITTED
+  // Phase 1: New audit actions
+  SHIFT_REQUEST_CREATED
+  SHIFT_REQUEST_APPROVED
+  SHIFT_REQUEST_DECLINED
+  SHIFT_REQUEST_CANCELLED
+  TIME_OFF_REQUEST_CREATED
+  TIME_OFF_REQUEST_APPROVED
+  TIME_OFF_REQUEST_DECLINED
+  TIME_OFF_REQUEST_CANCELLED
+  MESSAGE_SENT
 }
 
 model AuditLog {
