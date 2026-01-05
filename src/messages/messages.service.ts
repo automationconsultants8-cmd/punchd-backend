@@ -1,0 +1,177 @@
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
+
+@Injectable()
+export class MessagesService {
+  constructor(
+    private prisma: PrismaService,
+    private auditService: AuditService,
+  ) {}
+
+  async create(data: {
+    companyId: string;
+    senderId: string;
+    recipientId?: string;
+    subject?: string;
+    body: string;
+    shiftRequestId?: string;
+    timeOffRequestId?: string;
+  }) {
+    const message = await this.prisma.message.create({
+      data: {
+        companyId: data.companyId,
+        senderId: data.senderId,
+        recipientId: data.recipientId,
+        subject: data.subject,
+        body: data.body,
+        shiftRequestId: data.shiftRequestId,
+        timeOffRequestId: data.timeOffRequestId,
+      },
+      include: {
+        sender: true,
+        recipient: true,
+      },
+    });
+
+    await this.auditService.log({
+      companyId: data.companyId,
+      userId: data.senderId,
+      action: 'MESSAGE_SENT',
+      targetType: 'Message',
+      targetId: message.id,
+      details: {
+        recipientId: data.recipientId,
+        subject: data.subject,
+      },
+    });
+
+    return message;
+  }
+
+  async findAll(companyId: string, userId: string, filters?: {
+    isRead?: boolean;
+    sent?: boolean;
+  }) {
+    const where: any = { companyId };
+
+    if (filters?.sent) {
+      where.senderId = userId;
+    } else {
+      where.OR = [
+        { recipientId: userId },
+        { recipientId: null }, // Broadcast messages
+      ];
+    }
+
+    if (filters?.isRead !== undefined) {
+      where.isRead = filters.isRead;
+    }
+
+    return this.prisma.message.findMany({
+      where,
+      include: {
+        sender: true,
+        recipient: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findInbox(companyId: string, userId: string) {
+    return this.findAll(companyId, userId, { sent: false });
+  }
+
+  async findSent(companyId: string, userId: string) {
+    return this.findAll(companyId, userId, { sent: true });
+  }
+
+  async findUnread(companyId: string, userId: string) {
+    return this.findAll(companyId, userId, { isRead: false });
+  }
+
+  async findOne(id: string, userId: string) {
+    const message = await this.prisma.message.findUnique({
+      where: { id },
+      include: {
+        sender: true,
+        recipient: true,
+      },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    // Check if user has access
+    if (message.senderId !== userId && message.recipientId !== userId && message.recipientId !== null) {
+      throw new ForbiddenException('You do not have access to this message');
+    }
+
+    return message;
+  }
+
+  async markAsRead(id: string, userId: string) {
+    const message = await this.findOne(id, userId);
+
+    if (message.recipientId !== userId && message.recipientId !== null) {
+      throw new ForbiddenException('You can only mark your own messages as read');
+    }
+
+    return this.prisma.message.update({
+      where: { id },
+      data: {
+        isRead: true,
+        readAt: new Date(),
+      },
+      include: {
+        sender: true,
+        recipient: true,
+      },
+    });
+  }
+
+  async markAllAsRead(companyId: string, userId: string) {
+    return this.prisma.message.updateMany({
+      where: {
+        companyId,
+        OR: [
+          { recipientId: userId },
+          { recipientId: null },
+        ],
+        isRead: false,
+      },
+      data: {
+        isRead: true,
+        readAt: new Date(),
+      },
+    });
+  }
+
+  async getUnreadCount(companyId: string, userId: string) {
+    return this.prisma.message.count({
+      where: {
+        companyId,
+        OR: [
+          { recipientId: userId },
+          { recipientId: null },
+        ],
+        isRead: false,
+      },
+    });
+  }
+
+  // For admins: Get all messages sent to admins (broadcast)
+  async findAdminMessages(companyId: string) {
+    return this.prisma.message.findMany({
+      where: {
+        companyId,
+        recipientId: null, // Broadcast to admins
+      },
+      include: {
+        sender: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+}
