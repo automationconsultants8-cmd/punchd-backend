@@ -2,8 +2,8 @@ import { Controller, Post, Get, Body, HttpCode, HttpStatus, UnauthorizedExceptio
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
-import { MailerService } from '@nestjs-modules/mailer';
 import { ConfigService } from '@nestjs/config';
+import { EmailService } from '../email/email.service';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
@@ -13,8 +13,8 @@ export class AdminAuthController {
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
-    private mailerService: MailerService,
     private configService: ConfigService,
+    private emailService: EmailService,
   ) {}
 
   private generateInviteCode(): string {
@@ -275,27 +275,7 @@ export class AdminAuthController {
     const resetUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/reset-password?token=${token}`;
 
     try {
-      await this.mailerService.sendMail({
-        to: user.email!,
-        subject: "Punch'd - Reset Your Password",
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #C9A227;">Reset Your Password</h2>
-            <p>Hi ${user.name},</p>
-            <p>You requested to reset your password. Click the button below to set a new password:</p>
-            <p style="margin: 30px 0;">
-              <a href="${resetUrl}" style="background: linear-gradient(135deg, #C9A227, #D4AF37); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold;">
-                Reset Password
-              </a>
-            </p>
-            <p>This link expires in 1 hour.</p>
-            <p>If you didn't request this, you can safely ignore this email.</p>
-            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-            <p style="color: #888; font-size: 12px;">Punch'd by Krynovo</p>
-          </div>
-        `,
-      });
-
+      await this.emailService.sendPasswordResetEmail(user.email!, user.name, resetUrl);
       console.log(`📧 Password reset email sent to: ${user.email}`);
       return { success: true, message: 'Password reset email sent!' };
     } catch (err) {
