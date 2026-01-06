@@ -25,10 +25,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     return {
-      userId: payload.userId,
-      companyId: payload.companyId,
-      role: payload.role,
-      phone: payload.phone,
-    };
+  id: payload.userId,      // ✅ Now req.user.id works
+  userId: payload.userId,  // Keep for backward compatibility
+  companyId: payload.companyId,
+  role: payload.role,
+  phone: payload.phone,
+};
   }
 }
