@@ -1,26 +1,58 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { FeatureGuard } from '../features/feature.guard';
-import { RequireFeature } from '../features/feature.decorator';
 import { ShiftsService } from './shifts.service';
+import { ShiftStatus } from '@prisma/client';
 
 @ApiTags('Shifts')
 @Controller('shifts')
-@UseGuards(JwtAuthGuard, FeatureGuard)
+@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class ShiftsController {
   constructor(private readonly shiftsService: ShiftsService) {}
 
   @Post()
-  @RequireFeature('SHIFT_SCHEDULING')
-  @ApiOperation({ summary: 'Create a new shift' })
-  create(@Request() req, @Body() dto: any) {
+  @ApiOperation({ summary: 'Create a shift' })
+  create(
+    @Request() req,
+    @Body() dto: {
+      userId?: string;
+      jobId: string;
+      shiftDate: string;
+      startTime: string;
+      endTime: string;
+      notes?: string;
+      isOpen?: boolean;
+    },
+  ) {
     return this.shiftsService.create({
       companyId: req.user.companyId,
       userId: dto.userId,
       jobId: dto.jobId,
-      shiftDate: new Date(dto.shiftDate || dto.date),
+      shiftDate: new Date(dto.shiftDate),
+      startTime: new Date(dto.startTime),
+      endTime: new Date(dto.endTime),
+      notes: dto.notes,
+      isOpen: dto.isOpen,
+    });
+  }
+
+  @Post('open')
+  @ApiOperation({ summary: 'Create an open shift (available for claiming)' })
+  createOpenShift(
+    @Request() req,
+    @Body() dto: {
+      jobId: string;
+      shiftDate: string;
+      startTime: string;
+      endTime: string;
+      notes?: string;
+    },
+  ) {
+    return this.shiftsService.createOpenShift({
+      companyId: req.user.companyId,
+      jobId: dto.jobId,
+      shiftDate: new Date(dto.shiftDate),
       startTime: new Date(dto.startTime),
       endTime: new Date(dto.endTime),
       notes: dto.notes,
@@ -28,90 +60,132 @@ export class ShiftsController {
   }
 
   @Get()
-  @RequireFeature('SHIFT_SCHEDULING')
   @ApiOperation({ summary: 'Get all shifts' })
+  @ApiQuery({ name: 'userId', required: false })
+  @ApiQuery({ name: 'jobId', required: false })
+  @ApiQuery({ name: 'status', required: false, enum: ShiftStatus })
   @ApiQuery({ name: 'startDate', required: false })
   @ApiQuery({ name: 'endDate', required: false })
-  @ApiQuery({ name: 'jobId', required: false })
-  @ApiQuery({ name: 'userId', required: false })
+  @ApiQuery({ name: 'isOpen', required: false })
   findAll(
+    @Request() req,
+    @Query('userId') userId?: string,
+    @Query('jobId') jobId?: string,
+    @Query('status') status?: ShiftStatus,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('isOpen') isOpen?: string,
+  ) {
+    return this.shiftsService.findAll(req.user.companyId, {
+      userId,
+      jobId,
+      status,
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      isOpen: isOpen !== undefined ? isOpen === 'true' : undefined,
+    });
+  }
+
+  @Get('open')
+  @ApiOperation({ summary: 'Get all open shifts available for claiming' })
+  findOpenShifts(@Request() req) {
+    return this.shiftsService.findOpenShifts(req.user.companyId);
+  }
+
+  @Get('my-shifts')
+  @ApiOperation({ summary: 'Get current user\'s shifts' })
+  @ApiQuery({ name: 'startDate', required: false })
+  @ApiQuery({ name: 'endDate', required: false })
+  @ApiQuery({ name: 'status', required: false, enum: ShiftStatus })
+  findMyShifts(
     @Request() req,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
-    @Query('jobId') jobId?: string,
-    @Query('userId') userId?: string,
+    @Query('status') status?: ShiftStatus,
   ) {
-    return this.shiftsService.findAll(req.user.companyId, {
+    return this.shiftsService.findByUser(req.user.id, {
       startDate: startDate ? new Date(startDate) : undefined,
       endDate: endDate ? new Date(endDate) : undefined,
-      jobId,
-      userId,
+      status,
     });
   }
 
-  @Get('today')
-  @RequireFeature('SHIFT_SCHEDULING')
-  @ApiOperation({ summary: 'Get today\'s shifts' })
-  getTodayShifts(@Request() req) {
-    return this.shiftsService.getTodayShifts(req.user.companyId);
+  @Get('upcoming')
+  @ApiOperation({ summary: 'Get upcoming shifts for the next N days' })
+  @ApiQuery({ name: 'days', required: false })
+  getUpcoming(@Request() req, @Query('days') days?: string) {
+    return this.shiftsService.getUpcomingShifts(req.user.companyId, days ? parseInt(days) : 7);
   }
 
-  @Get('user/:userId')
-  @RequireFeature('SHIFT_SCHEDULING')
-  @ApiOperation({ summary: 'Get shifts for a specific user' })
-  getByUser(
-    @Param('userId') userId: string,
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-  ) {
-    return this.shiftsService.findByUser(userId, {
-      startDate: startDate ? new Date(startDate) : undefined,
-      endDate: endDate ? new Date(endDate) : undefined,
-    });
+  @Get('stats')
+  @ApiOperation({ summary: 'Get shift statistics' })
+  getStats(@Request() req) {
+    return this.shiftsService.getStats(req.user.companyId);
   }
 
   @Get(':id')
-  @RequireFeature('SHIFT_SCHEDULING')
   @ApiOperation({ summary: 'Get a shift by ID' })
   findOne(@Param('id') id: string) {
     return this.shiftsService.findOne(id);
   }
 
-  @Put(':id')
-  @RequireFeature('SHIFT_SCHEDULING')
+  @Post(':id/claim')
+  @ApiOperation({ summary: 'Claim an open shift' })
+  claimShift(@Param('id') id: string, @Request() req) {
+    return this.shiftsService.claimShift(id, req.user.id, req.user.companyId);
+  }
+
+  @Patch(':id')
   @ApiOperation({ summary: 'Update a shift' })
-  update(@Param('id') id: string, @Body() dto: any) {
-    return this.shiftsService.update(id, {
-      userId: dto.userId,
-      jobId: dto.jobId,
-      shiftDate: dto.shiftDate ? new Date(dto.shiftDate) : undefined,
-      startTime: dto.startTime ? new Date(dto.startTime) : undefined,
-      endTime: dto.endTime ? new Date(dto.endTime) : undefined,
-      status: dto.status,
-      notes: dto.notes,
-    });
+  update(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() dto: {
+      userId?: string;
+      jobId?: string;
+      shiftDate?: string;
+      startTime?: string;
+      endTime?: string;
+      status?: ShiftStatus;
+      notes?: string;
+      isOpen?: boolean;
+    },
+  ) {
+    return this.shiftsService.update(
+      id,
+      {
+        userId: dto.userId,
+        jobId: dto.jobId,
+        shiftDate: dto.shiftDate ? new Date(dto.shiftDate) : undefined,
+        startTime: dto.startTime ? new Date(dto.startTime) : undefined,
+        endTime: dto.endTime ? new Date(dto.endTime) : undefined,
+        status: dto.status,
+        notes: dto.notes,
+        isOpen: dto.isOpen,
+      },
+      req.user.id,
+    );
+  }
+
+  @Patch(':id/mark-open')
+  @ApiOperation({ summary: 'Mark a shift as open (admin)' })
+  markAsOpen(@Param('id') id: string, @Request() req) {
+    return this.shiftsService.markAsOpen(id, req.user.id);
+  }
+
+  @Patch(':id/status')
+  @ApiOperation({ summary: 'Update shift status' })
+  updateStatus(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() dto: { status: ShiftStatus },
+  ) {
+    return this.shiftsService.updateStatus(id, dto.status, req.user.id);
   }
 
   @Delete(':id')
-  @RequireFeature('SHIFT_SCHEDULING')
   @ApiOperation({ summary: 'Delete a shift' })
-  remove(@Param('id') id: string) {
-    return this.shiftsService.remove(id);
-  }
-
-  @Post('bulk')
-  @RequireFeature('SHIFT_SCHEDULING')
-  @ApiOperation({ summary: 'Create multiple shifts' })
-  createMany(@Request() req, @Body() dto: { shifts: any[] }) {
-    const shifts = dto.shifts.map(s => ({
-      companyId: req.user.companyId,
-      userId: s.userId,
-      jobId: s.jobId,
-      shiftDate: new Date(s.shiftDate || s.date),
-      startTime: new Date(s.startTime),
-      endTime: new Date(s.endTime),
-      notes: s.notes,
-    }));
-    return this.shiftsService.createMany(shifts);
+  delete(@Param('id') id: string, @Request() req) {
+    return this.shiftsService.delete(id, req.user.id);
   }
 }
