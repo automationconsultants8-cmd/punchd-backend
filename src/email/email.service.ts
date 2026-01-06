@@ -1,19 +1,51 @@
 import { Injectable } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
+import * as sgMail from '@sendgrid/mail';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class EmailService {
-  private transporter;
-
   constructor(private prisma: PrismaService) {
-    this.transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  }
+
+  private async sendEmail(to: string, subject: string, html: string) {
+    const msg = {
+      to,
+      from: process.env.EMAIL_FROM || 'noreply@gopunchd.com',
+      subject,
+      html,
+    };
+
+    try {
+      await sgMail.send(msg);
+      console.log(`📧 Email sent to ${to}`);
+      return { success: true };
+    } catch (error) {
+      console.error('❌ Email send error:', error.response?.body || error.message);
+      throw error;
+    }
+  }
+
+  async sendPasswordResetEmail(toEmail: string, userName: string, resetUrl: string) {
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #C9A227;">Reset Your Password</h2>
+        <p>Hi ${userName},</p>
+        <p>You requested to reset your password. Click the button below to set a new password:</p>
+        <p style="margin: 30px 0;">
+          <a href="${resetUrl}" style="background: linear-gradient(135deg, #C9A227, #D4AF37); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold;">
+            Reset Password
+          </a>
+        </p>
+        <p>This link expires in 1 hour.</p>
+        <p>If you didn't request this, you can safely ignore this email.</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+        <p style="color: #888; font-size: 12px;">Punch'd Time & Attendance System</p>
+      </div>
+    `;
+
+    await this.sendEmail(toEmail, "Punch'd - Reset Your Password", html);
+    return { success: true };
   }
 
   async sendWeeklyReport(toEmail: string, companyId: string) {
@@ -51,14 +83,14 @@ export class EmailService {
 
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h1 style="color: #a855f7; border-bottom: 2px solid #a855f7; padding-bottom: 10px;">
-          📊 Weekly Time & Attendance Report
+        <h1 style="color: #C9A227; border-bottom: 2px solid #C9A227; padding-bottom: 10px;">
+          Weekly Time & Attendance Report
         </h1>
 
         <p style="color: #666;">Report for: ${weekAgo.toLocaleDateString()} - ${new Date().toLocaleDateString()}</p>
 
         <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-          <h2 style="margin-top: 0; color: #333;">📈 Summary</h2>
+          <h2 style="margin-top: 0; color: #333;">Summary</h2>
           <p><strong>Total Entries:</strong> ${entries.length}</p>
           <p><strong>Total Hours Worked:</strong> ${totalHours} hours</p>
           <p><strong>Total Break Time:</strong> ${(totalBreakMinutes / 60).toFixed(1)} hours</p>
@@ -67,7 +99,7 @@ export class EmailService {
 
         ${overtimeWorkers.length > 0 ? `
           <div style="background: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
-            <h2 style="margin-top: 0; color: #856404;">⚠️ Overtime Alert</h2>
+            <h2 style="margin-top: 0; color: #856404;">Overtime Alert</h2>
             <p>The following workers exceeded 40 hours this week:</p>
             <ul>
               ${overtimeWorkers.map(w => `
@@ -77,13 +109,13 @@ export class EmailService {
           </div>
         ` : `
           <div style="background: #d4edda; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745;">
-            <h2 style="margin-top: 0; color: #155724;">✅ No Overtime</h2>
+            <h2 style="margin-top: 0; color: #155724;">No Overtime</h2>
             <p>All workers stayed under 40 hours this week.</p>
           </div>
         `}
 
         <div style="background: #e9ecef; padding: 20px; border-radius: 8px; margin: 20px 0;">
-          <h2 style="margin-top: 0; color: #333;">👷 Hours by Worker</h2>
+          <h2 style="margin-top: 0; color: #333;">Hours by Worker</h2>
           <table style="width: 100%; border-collapse: collapse;">
             <tr style="background: #dee2e6;">
               <th style="padding: 10px; text-align: left;">Worker</th>
@@ -101,41 +133,29 @@ export class EmailService {
         </div>
 
         <p style="color: #999; font-size: 12px; text-align: center; margin-top: 30px;">
-          Sent by ApexChronos Time & Attendance System
+          Sent by Punch'd Time & Attendance System
         </p>
       </div>
     `;
 
-    await this.transporter.sendMail({
-      from: `"ApexChronos" <${process.env.EMAIL_USER}>`,
-      to: toEmail,
-      subject: `📊 Weekly Report - ${new Date().toLocaleDateString()}`,
-      html,
-    });
-
+    await this.sendEmail(toEmail, `Weekly Report - ${new Date().toLocaleDateString()}`, html);
     return { success: true, message: 'Weekly report sent!' };
   }
 
   async sendOvertimeAlert(toEmail: string, workerName: string, totalHours: number) {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h1 style="color: #dc3545;">⚠️ Overtime Alert</h1>
+        <h1 style="color: #dc3545;">Overtime Alert</h1>
         <p><strong>${workerName}</strong> has exceeded 40 hours this week.</p>
         <p style="font-size: 24px; color: #dc3545;"><strong>${totalHours.toFixed(1)} hours</strong></p>
         <p>Overtime hours: <strong>${(totalHours - 40).toFixed(1)} hours</strong></p>
         <p>Estimated overtime cost: <strong>$${((totalHours - 40) * 15).toFixed(2)}</strong></p>
         <hr />
-        <p style="color: #999; font-size: 12px;">ApexChronos Time & Attendance System</p>
+        <p style="color: #999; font-size: 12px;">Punch'd Time & Attendance System</p>
       </div>
     `;
 
-    await this.transporter.sendMail({
-      from: `"ApexChronos" <${process.env.EMAIL_USER}>`,
-      to: toEmail,
-      subject: `⚠️ Overtime Alert: ${workerName}`,
-      html,
-    });
-
+    await this.sendEmail(toEmail, `Overtime Alert: ${workerName}`, html);
     return { success: true };
   }
 
@@ -150,7 +170,7 @@ export class EmailService {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background: #dc3545; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
-          <h1 style="margin: 0;">🚨 BUDDY PUNCH ATTEMPT DETECTED</h1>
+          <h1 style="margin: 0;">BUDDY PUNCH ATTEMPT DETECTED</h1>
         </div>
         
         <div style="background: #f8d7da; padding: 20px; border: 1px solid #f5c6cb; border-top: none;">
@@ -159,7 +179,7 @@ export class EmailService {
           </p>
           
           <div style="background: white; padding: 15px; border-radius: 8px; margin: 15px 0;">
-            <h3 style="margin-top: 0; color: #333;">📋 Details</h3>
+            <h3 style="margin-top: 0; color: #333;">Details</h3>
             <table style="width: 100%;">
               <tr>
                 <td style="padding: 8px 0; color: #666;"><strong>Worker Account:</strong></td>
@@ -185,13 +205,13 @@ export class EmailService {
           </div>
 
           <div style="background: white; padding: 15px; border-radius: 8px; margin: 15px 0;">
-            <h3 style="margin-top: 0; color: #333;">📸 Submitted Photo</h3>
+            <h3 style="margin-top: 0; color: #333;">Submitted Photo</h3>
             <p style="color: #666; font-size: 14px;">The person who attempted to clock in:</p>
             <img src="${photoUrl}" alt="Clock-in attempt photo" style="max-width: 100%; border-radius: 8px; border: 2px solid #dc3545;" />
           </div>
 
           <div style="background: #fff3cd; padding: 15px; border-radius: 8px; border-left: 4px solid #ffc107;">
-            <h4 style="margin-top: 0; color: #856404;">⚠️ Recommended Action</h4>
+            <h4 style="margin-top: 0; color: #856404;">Recommended Action</h4>
             <ul style="margin-bottom: 0; color: #856404;">
               <li>Review the submitted photo above</li>
               <li>Contact ${workerName} to verify the situation</li>
@@ -203,20 +223,14 @@ export class EmailService {
 
         <div style="background: #333; color: #999; padding: 15px; border-radius: 0 0 8px 8px; text-align: center;">
           <p style="margin: 0; font-size: 12px;">
-            ApexChronos Time & Attendance System<br />
+            Punch'd Time & Attendance System<br />
             This is an automated security alert
           </p>
         </div>
       </div>
     `;
 
-    await this.transporter.sendMail({
-      from: `"ApexChronos Security" <${process.env.EMAIL_USER}>`,
-      to: toEmail,
-      subject: `🚨 ALERT: Buddy Punch Attempt Blocked - ${workerName}`,
-      html,
-    });
-
+    await this.sendEmail(toEmail, `ALERT: Buddy Punch Attempt Blocked - ${workerName}`, html);
     console.log(`📧 Buddy punch alert sent to ${toEmail}`);
     return { success: true };
   }
