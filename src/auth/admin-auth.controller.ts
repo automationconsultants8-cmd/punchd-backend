@@ -30,66 +30,6 @@ export class AdminAuthController {
     return code;
   }
 
-  // TEMPORARY - List all admin emails (DELETE AFTER FINDING YOUR EMAIL)
-  @Get('list-admins')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'List all admin users - TEMPORARY' })
-  async listAdmins() {
-    const users = await this.prisma.user.findMany({
-      where: {
-        role: { in: ['ADMIN', 'OWNER', 'MANAGER'] },
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        createdAt: true,
-        company: {
-          select: {
-            name: true,
-          },
-        },
-      },
-    });
-    
-    return users;
-  }
-  // TEMPORARY - Force reset password (DELETE AFTER USE)
-@Post('force-reset-password')
-@HttpCode(HttpStatus.OK)
-@ApiOperation({ summary: 'Force reset password - TEMPORARY' })
-async forceResetPassword(@Body() body: { email: string; newPassword: string }) {
-  const { email, newPassword } = body;
-
-  if (!email || !newPassword) {
-    throw new BadRequestException('Email and newPassword are required');
-  }
-
-  if (newPassword.length < 6) {
-    throw new BadRequestException('Password must be at least 6 characters');
-  }
-
-  const user = await this.prisma.user.findFirst({
-    where: { email: email.toLowerCase().trim() },
-  });
-
-  if (!user) {
-    throw new BadRequestException('User not found');
-  }
-
-  const passwordHash = await bcrypt.hash(newPassword, 10);
-
-  await this.prisma.user.update({
-    where: { id: user.id },
-    data: { passwordHash },
-  });
-
-  console.log(`✅ Password force reset for: ${email}`);
-
-  return { success: true, message: 'Password reset successful' };
-}
-
   @Post('signup')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register new company and owner account' })
