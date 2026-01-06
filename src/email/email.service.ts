@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 @Injectable()
 export class EmailService {
   constructor(private prisma: PrismaService) {
-    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY || '');
   }
 
   private async sendEmail(to: string, subject: string, html: string) {
