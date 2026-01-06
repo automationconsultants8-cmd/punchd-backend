@@ -55,6 +55,40 @@ export class AdminAuthController {
     
     return users;
   }
+  // TEMPORARY - Force reset password (DELETE AFTER USE)
+@Post('force-reset-password')
+@HttpCode(HttpStatus.OK)
+@ApiOperation({ summary: 'Force reset password - TEMPORARY' })
+async forceResetPassword(@Body() body: { email: string; newPassword: string }) {
+  const { email, newPassword } = body;
+
+  if (!email || !newPassword) {
+    throw new BadRequestException('Email and newPassword are required');
+  }
+
+  if (newPassword.length < 6) {
+    throw new BadRequestException('Password must be at least 6 characters');
+  }
+
+  const user = await this.prisma.user.findFirst({
+    where: { email: email.toLowerCase().trim() },
+  });
+
+  if (!user) {
+    throw new BadRequestException('User not found');
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+
+  await this.prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash },
+  });
+
+  console.log(`✅ Password force reset for: ${email}`);
+
+  return { success: true, message: 'Password reset successful' };
+}
 
   @Post('signup')
   @HttpCode(HttpStatus.CREATED)
