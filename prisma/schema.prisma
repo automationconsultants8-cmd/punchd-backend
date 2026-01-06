@@ -72,7 +72,6 @@ model User {
   passwordHash        String?
   hourlyRate          Decimal?       @db.Decimal(10, 2)
   
-  // WH-347 Required Fields
   address             String?
   city                String?
   state               String?
@@ -93,20 +92,16 @@ model User {
   jobRates            WorkerJobRate[]
   breakViolations     BreakViolation[]
   
-  // Phase 1: Shift Requests
   shiftRequestsCreated    ShiftRequest[] @relation("ShiftRequestRequester")
   shiftRequestsAsTarget   ShiftRequest[] @relation("ShiftRequestSwapTarget")
   shiftRequestsReviewed   ShiftRequest[] @relation("ShiftRequestReviewer")
   
-  // Phase 1: Time Off Requests
   timeOffRequestsCreated  TimeOffRequest[] @relation("TimeOffRequester")
   timeOffRequestsReviewed TimeOffRequest[] @relation("TimeOffReviewer")
   
-  // Phase 1: Messages
   messagesSent            Message[] @relation("MessageSender")
   messagesReceived        Message[] @relation("MessageRecipient")
   
-  // Push Notifications
   pushTokens              PushToken[]
 
   @@unique([companyId, phone])
@@ -159,7 +154,6 @@ model Job {
   defaultHourlyRate     Decimal?  @db.Decimal(10, 2)
   isPrevailingWage      Boolean   @default(false)
   
-  // WH-347 Fields
   projectNumber         String?
   contractNumber        String?
   wageDecisionNumber    String?
@@ -203,28 +197,23 @@ model TimeEntry {
   breakMinutes      Int       @default(0)
   isOnBreak         Boolean   @default(false)
 
-  // Approval workflow fields
   approvalStatus    ApprovalStatus @default(PENDING)
   approvedById      String?
   approvedAt        DateTime?
   rejectionReason   String?
 
-  // Pay rate fields (snapshot at time of entry)
   hourlyRate        Decimal?  @db.Decimal(10, 2)
   laborCost         Decimal?  @db.Decimal(10, 2)
   isPrevailingWage  Boolean   @default(false)
 
-  // Overtime breakdown (in minutes)
   regularMinutes    Int       @default(0)
   overtimeMinutes   Int       @default(0)
   doubleTimeMinutes Int       @default(0)
 
-  // Pay breakdown
   regularPay        Decimal?  @db.Decimal(10, 2)
   overtimePay       Decimal?  @db.Decimal(10, 2)
   doubleTimePay     Decimal?  @db.Decimal(10, 2)
 
-  // Break compliance
   mealBreaksTaken   Int       @default(0)
   restBreaksTaken   Int       @default(0)
   breakCompliant    Boolean   @default(true)
@@ -380,37 +369,35 @@ enum ShiftStatus {
   COMPLETED
   CANCELLED
   NO_SHOW
+  OPEN
 }
 
 model Shift {
   id            String      @id @default(uuid())
   companyId     String
-  userId        String
+  userId        String?
   jobId         String
   shiftDate     DateTime    @db.Date
   startTime     DateTime
   endTime       DateTime
   status        ShiftStatus @default(SCHEDULED)
+  isOpen        Boolean     @default(false)
   notes         String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
   company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
   job           Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
   
-  // Phase 1: Shift Requests
   shiftRequests ShiftRequest[]
 
   @@index([companyId, shiftDate])
+  @@index([companyId, isOpen])
   @@index([userId, shiftDate])
   @@index([jobId, shiftDate])
   @@map("shifts")
 }
-
-// =============================================
-// PHASE 1: SHIFT REQUEST SYSTEM
-// =============================================
 
 enum ShiftRequestType {
   DROP
@@ -432,11 +419,9 @@ model ShiftRequest {
   requestType     ShiftRequestType
   reason          String
   
-  // For SWAP requests only
   swapTargetId    String?
   swapShiftId     String?
   
-  // Status & Review
   status          ShiftRequestStatus @default(PENDING)
   reviewedById    String?
   reviewedAt      DateTime?
@@ -456,10 +441,6 @@ model ShiftRequest {
   @@index([shiftId])
   @@map("shift_requests")
 }
-
-// =============================================
-// PHASE 1: TIME OFF REQUEST SYSTEM
-// =============================================
 
 enum TimeOffType {
   PTO
@@ -486,7 +467,6 @@ model TimeOffRequest {
   endDate         DateTime       @db.Date
   reason          String?
   
-  // Status & Review
   status          TimeOffStatus  @default(PENDING)
   reviewedById    String?
   reviewedAt      DateTime?
@@ -504,10 +484,6 @@ model TimeOffRequest {
   @@index([companyId, startDate, endDate])
   @@map("time_off_requests")
 }
-
-// =============================================
-// PHASE 1: IN-APP MESSAGING
-// =============================================
 
 model Message {
   id            String    @id @default(uuid())
@@ -534,10 +510,6 @@ model Message {
   @@map("messages")
 }
 
-// =============================================
-// PUSH NOTIFICATIONS
-// =============================================
-
 model PushToken {
   id          String   @id @default(uuid())
   userId      String
@@ -555,10 +527,6 @@ model PushToken {
   @@map("push_tokens")
 }
 
-// =============================================
-// AUDIT LOG
-// =============================================
-
 enum AuditAction {
   USER_CREATED
   USER_UPDATED
@@ -573,6 +541,7 @@ enum AuditAction {
   SHIFT_CREATED
   SHIFT_UPDATED
   SHIFT_DELETED
+  SHIFT_CLAIMED
   COMPANY_SETTINGS_UPDATED
   LOGIN
   PASSWORD_RESET
