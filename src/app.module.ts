@@ -19,6 +19,7 @@ import { CompanyModule } from './company/company.module';
 import { ShiftRequestsModule } from './shift-requests/shift-requests.module';
 import { TimeOffModule } from './time-off/time-off.module';
 import { MessagesModule } from './messages/messages.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { MessagesModule } from './messages/messages.module';
     StripeModule,
     CertifiedPayrollModule,
     CompanyModule,
+    NotificationsModule,
     ShiftRequestsModule,
     TimeOffModule,
     MessagesModule,

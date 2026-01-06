@@ -1,12 +1,14 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class MessagesService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(data: {
@@ -45,6 +47,19 @@ export class MessagesService {
         subject: data.subject,
       },
     });
+
+    // Send push notification to recipient
+    if (data.recipientId) {
+      const sender = await this.prisma.user.findUnique({
+        where: { id: data.senderId },
+        select: { name: true },
+      });
+      await this.notificationsService.notifyNewMessage(
+        data.recipientId,
+        sender?.name || 'Someone',
+        data.subject,
+      );
+    }
 
     return message;
   }

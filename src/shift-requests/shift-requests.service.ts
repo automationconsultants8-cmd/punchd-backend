@@ -1,13 +1,15 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { ShiftRequestType, ShiftRequestStatus, UserRole } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
+import { ShiftRequestType, ShiftRequestStatus } from '@prisma/client';
 
 @Injectable()
 export class ShiftRequestsService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(data: {
@@ -22,7 +24,7 @@ export class ShiftRequestsService {
     // Verify shift exists and belongs to requester
     const shift = await this.prisma.shift.findUnique({
       where: { id: data.shiftId },
-      include: { user: true },
+      include: { job: true },
     });
 
     if (!shift) {
@@ -33,11 +35,7 @@ export class ShiftRequestsService {
       throw new ForbiddenException('You can only request changes to your own shifts');
     }
 
-    if (shift.companyId !== data.companyId) {
-      throw new ForbiddenException('Shift does not belong to your company');
-    }
-
-    // Check for existing pending request on this shift
+    // Check for existing pending request
     const existingRequest = await this.prisma.shiftRequest.findFirst({
       where: {
         shiftId: data.shiftId,
@@ -46,29 +44,14 @@ export class ShiftRequestsService {
     });
 
     if (existingRequest) {
-      throw new BadRequestException('A pending request already exists for this shift');
-    }
-
-    // For swap requests, validate swap target
-    if (data.requestType === 'SWAP') {
-      if (!data.swapTargetId) {
-        throw new BadRequestException('Swap target is required for swap requests');
-      }
-
-      const swapTarget = await this.prisma.user.findUnique({
-        where: { id: data.swapTargetId },
-      });
-
-      if (!swapTarget || swapTarget.companyId !== data.companyId) {
-        throw new BadRequestException('Invalid swap target');
-      }
+      throw new BadRequestException('There is already a pending request for this shift');
     }
 
     const request = await this.prisma.shiftRequest.create({
       data: {
         companyId: data.companyId,
-        shiftId: data.shiftId,
         requesterId: data.requesterId,
+        shiftId: data.shiftId,
         requestType: data.requestType,
         reason: data.reason,
         swapTargetId: data.swapTargetId,
@@ -93,9 +76,19 @@ export class ShiftRequestsService {
       details: {
         requestType: data.requestType,
         shiftId: data.shiftId,
-        reason: data.reason,
       },
     });
+
+    // Notify admins of new request
+    const requester = await this.prisma.user.findUnique({
+      where: { id: data.requesterId },
+      select: { name: true },
+    });
+    await this.notificationsService.notifyAdminsOfRequest(
+      data.companyId,
+      'shift',
+      requester?.name || 'A worker',
+    );
 
     return request;
   }
@@ -134,7 +127,7 @@ export class ShiftRequestsService {
       where: { id },
       include: {
         shift: {
-          include: { job: true, user: true },
+          include: { job: true },
         },
         requester: true,
         swapTarget: true,
@@ -156,7 +149,6 @@ export class ShiftRequestsService {
         shift: {
           include: { job: true },
         },
-        swapTarget: true,
         reviewedBy: true,
       },
       orderBy: { createdAt: 'desc' },
@@ -170,21 +162,6 @@ export class ShiftRequestsService {
       throw new BadRequestException('Request has already been processed');
     }
 
-    // Handle the actual shift change based on request type
-    if (request.requestType === 'DROP') {
-      // Cancel the shift
-      await this.prisma.shift.update({
-        where: { id: request.shiftId },
-        data: { status: 'CANCELLED' },
-      });
-    } else if (request.requestType === 'SWAP' && request.swapTargetId) {
-      // Swap the shift assignment
-      await this.prisma.shift.update({
-        where: { id: request.shiftId },
-        data: { userId: request.swapTargetId },
-      });
-    }
-
     const updated = await this.prisma.shiftRequest.update({
       where: { id },
       data: {
@@ -194,12 +171,35 @@ export class ShiftRequestsService {
         reviewerNotes,
       },
       include: {
-        shift: { include: { job: true } },
+        shift: {
+          include: { job: true },
+        },
         requester: true,
-        swapTarget: true,
         reviewedBy: true,
       },
     });
+
+    // If DROP request, cancel the shift
+    if (request.requestType === 'DROP') {
+      await this.prisma.shift.update({
+        where: { id: request.shiftId },
+        data: { status: 'CANCELLED' },
+      });
+    }
+
+    // If SWAP request, swap the users on shifts
+    if (request.requestType === 'SWAP' && request.swapTargetId && request.swapShiftId) {
+      await this.prisma.$transaction([
+        this.prisma.shift.update({
+          where: { id: request.shiftId },
+          data: { userId: request.swapTargetId },
+        }),
+        this.prisma.shift.update({
+          where: { id: request.swapShiftId },
+          data: { userId: request.requesterId },
+        }),
+      ]);
+    }
 
     await this.auditService.log({
       companyId: request.companyId,
@@ -208,11 +208,17 @@ export class ShiftRequestsService {
       targetType: 'ShiftRequest',
       targetId: id,
       details: {
-        requestType: request.requestType,
         requesterId: request.requesterId,
         reviewerNotes,
       },
     });
+
+    // Notify requester
+    const shiftDate = updated.shift.startTime.toLocaleDateString();
+    await this.notificationsService.notifyShiftRequestApproved(
+      request.requesterId,
+      shiftDate,
+    );
 
     return updated;
   }
@@ -233,9 +239,10 @@ export class ShiftRequestsService {
         reviewerNotes,
       },
       include: {
-        shift: { include: { job: true } },
+        shift: {
+          include: { job: true },
+        },
         requester: true,
-        swapTarget: true,
         reviewedBy: true,
       },
     });
@@ -247,11 +254,18 @@ export class ShiftRequestsService {
       targetType: 'ShiftRequest',
       targetId: id,
       details: {
-        requestType: request.requestType,
         requesterId: request.requesterId,
         reviewerNotes,
       },
     });
+
+    // Notify requester
+    const shiftDate = request.shift.startTime.toLocaleDateString();
+    await this.notificationsService.notifyShiftRequestDeclined(
+      request.requesterId,
+      shiftDate,
+      reviewerNotes,
+    );
 
     return updated;
   }
@@ -271,7 +285,9 @@ export class ShiftRequestsService {
       where: { id },
       data: { status: 'CANCELLED' },
       include: {
-        shift: { include: { job: true } },
+        shift: {
+          include: { job: true },
+        },
         requester: true,
       },
     });

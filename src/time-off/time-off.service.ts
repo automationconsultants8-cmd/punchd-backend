@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { TimeOffType, TimeOffStatus } from '@prisma/client';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class TimeOffService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(data: {
@@ -68,6 +70,17 @@ export class TimeOffService {
         endDate: data.endDate,
       },
     });
+
+    // Notify admins of new request
+    const requester = await this.prisma.user.findUnique({
+      where: { id: data.requesterId },
+      select: { name: true },
+    });
+    await this.notificationsService.notifyAdminsOfRequest(
+      data.companyId,
+      'time_off',
+      requester?.name || 'A worker',
+    );
 
     return request;
   }
@@ -168,6 +181,13 @@ export class TimeOffService {
       },
     });
 
+    // Notify requester
+    await this.notificationsService.notifyTimeOffApproved(
+      request.requesterId,
+      updated.startDate.toISOString().split('T')[0],
+      updated.endDate.toISOString().split('T')[0],
+    );
+
     return updated;
   }
 
@@ -203,6 +223,13 @@ export class TimeOffService {
         reviewerNotes,
       },
     });
+
+    // Notify requester
+    await this.notificationsService.notifyTimeOffDeclined(
+      request.requesterId,
+      request.startDate.toISOString().split('T')[0],
+      reviewerNotes,
+    );
 
     return updated;
   }

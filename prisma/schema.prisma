@@ -105,6 +105,9 @@ model User {
   // Phase 1: Messages
   messagesSent            Message[] @relation("MessageSender")
   messagesReceived        Message[] @relation("MessageRecipient")
+  
+  // Push Notifications
+  pushTokens              PushToken[]
 
   @@unique([companyId, phone])
   @@index([companyId, email])
@@ -430,8 +433,8 @@ model ShiftRequest {
   reason          String
   
   // For SWAP requests only
-  swapTargetId    String?            // The worker they want to swap with
-  swapShiftId     String?            // The shift they want to swap for (optional)
+  swapTargetId    String?
+  swapShiftId     String?
   
   // Status & Review
   status          ShiftRequestStatus @default(PENDING)
@@ -510,13 +513,12 @@ model Message {
   id            String    @id @default(uuid())
   companyId     String
   senderId      String
-  recipientId   String?   // Null = broadcast to admins
+  recipientId   String?
   subject       String?
   body          String
   isRead        Boolean   @default(false)
   readAt        DateTime?
   
-  // Optional link to related entities
   shiftRequestId    String?
   timeOffRequestId  String?
   
@@ -533,7 +535,28 @@ model Message {
 }
 
 // =============================================
-// AUDIT LOG (Updated with new actions)
+// PUSH NOTIFICATIONS
+// =============================================
+
+model PushToken {
+  id          String   @id @default(uuid())
+  userId      String
+  token       String
+  platform    String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, token])
+  @@index([userId, isActive])
+  @@index([token])
+  @@map("push_tokens")
+}
+
+// =============================================
+// AUDIT LOG
 // =============================================
 
 enum AuditAction {
@@ -560,7 +583,6 @@ enum AuditAction {
   BREAK_VIOLATION_WAIVED
   CERTIFIED_PAYROLL_GENERATED
   CERTIFIED_PAYROLL_SUBMITTED
-  // Phase 1: New audit actions
   SHIFT_REQUEST_CREATED
   SHIFT_REQUEST_APPROVED
   SHIFT_REQUEST_DECLINED
