@@ -1,3 +1,8 @@
+// ============================================
+// FILE: src/stripe/stripe.service.ts (BACKEND)
+// ACTION: REPLACE ENTIRE FILE
+// ============================================
+
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -376,26 +381,42 @@ export class StripeService {
       where: { companyId },
     });
 
-    // Check if trial expired
+    const now = new Date();
+    let daysRemaining: number | null = null;
+    let isWarningPeriod = false;
+    let trialExpired = false;
+
+    // Check trial status
     if (company.subscriptionTier === 'trial' && company.trialEndsAt) {
-      if (new Date() > company.trialEndsAt) {
-        return {
-          tier: 'trial_expired',
-          status: 'inactive',
-          trialEndsAt: company.trialEndsAt,
-          needsUpgrade: true,
-          workerCount,
-        };
+      const trialEnd = new Date(company.trialEndsAt);
+      const msRemaining = trialEnd.getTime() - now.getTime();
+      daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
+
+      if (daysRemaining <= 0) {
+        trialExpired = true;
+        daysRemaining = 0;
+      } else if (daysRemaining <= 2) {
+        // Warning period: 2 days or less remaining (day 12-13)
+        isWarningPeriod = true;
       }
     }
 
-    const isPaid = ['starter', 'professional', 'contractor'].includes(company.subscriptionTier);
+    const isPaid = ['starter', 'professional', 'contractor'].includes(
+      company.subscriptionTier?.toLowerCase() || ''
+    );
+
+    // Determine if subscription is active
+    const isActive = isPaid || (company.subscriptionTier === 'trial' && !trialExpired);
 
     return {
       tier: company.subscriptionTier,
       status: company.subscriptionStatus,
       trialEndsAt: company.trialEndsAt,
-      needsUpgrade: !isPaid && company.subscriptionTier !== 'trial',
+      daysRemaining,
+      isWarningPeriod,
+      trialExpired,
+      isActive,
+      needsUpgrade: trialExpired || (!isPaid && company.subscriptionTier !== 'trial'),
       workerCount,
     };
   }
