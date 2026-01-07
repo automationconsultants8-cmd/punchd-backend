@@ -13,7 +13,7 @@ export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
   @Get()
-  @RequireFeature('AUDIT_LOGS')
+  @RequiresFeature('AUDIT_LOGS')
   @ApiOperation({ summary: 'Get audit logs for company' })
   @ApiQuery({ name: 'action', required: false, description: 'Filter by action type' })
   @ApiQuery({ name: 'limit', required: false, description: 'Number of entries to return' })
