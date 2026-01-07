@@ -3,6 +3,8 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TimeOffService } from './time-off.service';
 import { TimeOffStatus, TimeOffType } from '@prisma/client';
+import { RequiresFeature } from '../features/feature.decorator';
+import { FeatureGuard } from '../features/feature.guard';
 
 @ApiTags('Time Off')
 @Controller('time-off')
