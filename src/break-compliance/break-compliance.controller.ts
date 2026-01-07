@@ -2,6 +2,8 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } 
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { BreakComplianceService, BreakComplianceSettings } from './break-compliance.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RequiresFeature } from '../features/feature.decorator';
+import { FeatureGuard } from '../features/feature.guard';
 
 @ApiTags('Break Compliance')
 @Controller('break-compliance')
