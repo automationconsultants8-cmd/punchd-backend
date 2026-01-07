@@ -6,24 +6,31 @@ import Stripe from 'stripe';
 // Price IDs from Stripe Dashboard
 const PRICE_IDS = {
   starter: {
-    monthly: 'price_1SkJx6QXF9jw9z1y1tqz3DC0',
-    yearly: 'price_1SkJzLQXF9jw9z1yObbjuNAZ',
+    monthly: 'price_1SmUUsQXF9jw9z1yzAFwL1B9',
+    yearly: 'price_1SmUVEQXF9jw9z1yZTA0m6V6',
   },
   professional: {
-    monthly: 'price_1SkJxeQXF9jw9z1yS4EpxI5C',
-    yearly: 'price_1SkJziQXF9jw9z1yTDNSGBjl',
+    monthly: 'price_1SmUVrQXF9jw9z1yZ27dYCBr',
+    yearly: 'price_1SmUWBQXF9jw9z1yvOo4nC43',
   },
-  enterprise: {
-    monthly: 'price_1SkJy8QXF9jw9z1yShbto2vr',
-    yearly: 'price_1SkJzxQXF9jw9z1y8ffmsgvI',
+  contractor: {
+    monthly: 'price_1SmUWUQXF9jw9z1y7TqMc3mN',
+    yearly: 'price_1SmUWtQXF9jw9z1yhgdtms00',
   },
+};
+
+// Setup fee price IDs (one-time charges)
+const SETUP_FEE_IDS = {
+  starter: 'price_1SmUXCQXF9jw9z1yowceibih',
+  professional: 'price_1SmUXaQXF9jw9z1ytekwjdnM',
+  contractor: null, // No setup fee for contractor
 };
 
 // Minimum users per plan
 const MINIMUM_USERS = {
-  starter: 10,
-  professional: 10,
-  enterprise: 25,
+  starter: 5,
+  professional: 5,
+  contractor: 10,
 };
 
 @Injectable()
@@ -47,7 +54,7 @@ export class StripeService {
     requestedWorkerCount: number
   ) {
     // Validate plan
-    if (!['starter', 'professional', 'enterprise'].includes(planId)) {
+    if (!['starter', 'professional', 'contractor'].includes(planId)) {
       throw new BadRequestException('Invalid plan selected');
     }
 
@@ -95,16 +102,28 @@ export class StripeService {
       });
     }
 
+    // Build line items
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+      {
+        price: priceId,
+        quantity: quantity,
+      },
+    ];
+
+    // Add setup fee for monthly plans (waived for yearly)
+    const setupFeeId = SETUP_FEE_IDS[planId as keyof typeof SETUP_FEE_IDS];
+    if (billingCycle === 'monthly' && setupFeeId) {
+      lineItems.push({
+        price: setupFeeId,
+        quantity: 1,
+      });
+    }
+
     // Create checkout session
     const session = await this.stripe.checkout.sessions.create({
       customer: customerId,
       payment_method_types: ['card'],
-      line_items: [
-        {
-          price: priceId,
-          quantity: quantity,
-        },
-      ],
+      line_items: lineItems,
       mode: 'subscription',
       success_url: `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/billing?success=true`,
       cancel_url: `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/billing?canceled=true`,
@@ -370,7 +389,7 @@ export class StripeService {
       }
     }
 
-    const isPaid = ['starter', 'professional', 'enterprise'].includes(company.subscriptionTier);
+    const isPaid = ['starter', 'professional', 'contractor'].includes(company.subscriptionTier);
 
     return {
       tier: company.subscriptionTier,
