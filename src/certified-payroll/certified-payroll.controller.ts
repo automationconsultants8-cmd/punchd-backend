@@ -6,7 +6,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Certified Payroll')
 @Controller('certified-payroll')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('CERTIFIED_PAYROLL')
 @ApiBearerAuth()
 export class CertifiedPayrollController {
   constructor(private readonly certifiedPayrollService: CertifiedPayrollService) {}
