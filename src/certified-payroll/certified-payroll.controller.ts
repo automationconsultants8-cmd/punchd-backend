@@ -3,6 +3,8 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger'
 import { Response } from 'express';
 import { CertifiedPayrollService, PayrollPreviewData } from './certified-payroll.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RequiresFeature } from '../features/feature.decorator';
+import { FeatureGuard } from '../features/feature.guard';
 
 @ApiTags('Certified Payroll')
 @Controller('certified-payroll')
