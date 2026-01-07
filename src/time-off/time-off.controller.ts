@@ -6,7 +6,8 @@ import { TimeOffStatus, TimeOffType } from '@prisma/client';
 
 @ApiTags('Time Off')
 @Controller('time-off')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('TIME_OFF')
 @ApiBearerAuth()
 export class TimeOffController {
   constructor(private readonly timeOffService: TimeOffService) {}
