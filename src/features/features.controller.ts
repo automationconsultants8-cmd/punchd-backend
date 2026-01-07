@@ -1,18 +1,14 @@
 import { Controller, Get, UseGuards, Request } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
-import { getAllowedFeatures, FEATURE_FLAGS } from './features';
+import { getAllowedFeatures, getRequiredTier, FEATURE_FLAGS, FeatureFlag } from './features';
 
-@ApiTags('Features')
 @Controller('features')
+@UseGuards(JwtAuthGuard)
 export class FeaturesController {
   constructor(private prisma: PrismaService) {}
 
   @Get()
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get allowed features for current subscription' })
   async getFeatures(@Request() req) {
     const company = await this.prisma.company.findUnique({
       where: { id: req.user.companyId },
@@ -21,13 +17,20 @@ export class FeaturesController {
     const tier = company?.subscriptionTier || 'trial';
     const allowedFeatures = getAllowedFeatures(tier);
 
+    // Build feature map with access info
+    const featureMap: Record<string, { allowed: boolean; requiredTier: string }> = {};
+    
+    for (const feature of Object.keys(FEATURE_FLAGS) as FeatureFlag[]) {
+      featureMap[feature] = {
+        allowed: allowedFeatures.includes(feature),
+        requiredTier: getRequiredTier(feature),
+      };
+    }
+
     return {
-      tier,
-      features: allowedFeatures,
-      featureFlags: Object.keys(FEATURE_FLAGS).reduce((acc, feature) => {
-        acc[feature] = allowedFeatures.includes(feature as any);
-        return acc;
-      }, {} as Record<string, boolean>),
+      currentTier: tier,
+      features: featureMap,
+      allowedFeatures,
     };
   }
 }
