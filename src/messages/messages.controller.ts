@@ -2,6 +2,8 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } 
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MessagesService } from './messages.service';
+import { RequiresFeature } from '../features/feature.decorator';
+import { FeatureGuard } from '../features/feature.guard';
 
 @ApiTags('Messages')
 @Controller('messages')
