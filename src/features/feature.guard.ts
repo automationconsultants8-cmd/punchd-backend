@@ -1,7 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
-import { hasFeature, FeatureFlag } from './features';
+import { hasFeature, getRequiredTier, FeatureFlag } from './features';
 
 @Injectable()
 export class FeatureGuard implements CanActivate {
@@ -35,9 +35,14 @@ export class FeatureGuard implements CanActivate {
     const tier = company.subscriptionTier || 'trial';
     
     if (!hasFeature(tier, requiredFeature)) {
-      throw new ForbiddenException(
-        `This feature requires a higher subscription tier. Please upgrade to access ${requiredFeature.toLowerCase().replace(/_/g, ' ')}.`
-      );
+      const requiredTier = getRequiredTier(requiredFeature);
+      throw new ForbiddenException({
+        message: `This feature requires the ${requiredTier.charAt(0).toUpperCase() + requiredTier.slice(1)} plan or higher.`,
+        feature: requiredFeature,
+        currentTier: tier,
+        requiredTier: requiredTier,
+        upgradeUrl: '/billing',
+      });
     }
 
     return true;
