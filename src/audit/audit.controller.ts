@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { FeatureGuard } from '../features/feature.guard';
-import { RequireFeature } from '../features/feature.decorator';
+import { RequiresFeature } from '../features/feature.decorator';
 import { AuditService } from './audit.service';
 
 @ApiTags('Audit')
