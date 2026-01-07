@@ -47,3 +47,13 @@ export class AuthController {
     return this.authService.getCompanies();
   }
 }
+@Post('set-trial-test')
+async setTrialTest(@Body() body: { days: number }) {
+  const companies = await this.prisma.company.updateMany({
+    data: {
+      subscriptionTier: 'trial',
+      trialEndsAt: new Date(Date.now() + (body.days || 2) * 24 * 60 * 60 * 1000)
+    }
+  });
+  return { updated: companies.count };
+}
