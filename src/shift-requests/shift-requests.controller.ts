@@ -3,10 +3,13 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger'
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShiftRequestsService } from './shift-requests.service';
 import { ShiftRequestStatus, ShiftRequestType } from '@prisma/client';
+import { RequiresFeature } from '../features/feature.decorator';
+import { FeatureGuard } from '../features/feature.guard';
 
 @ApiTags('Shift Requests')
 @Controller('shift-requests')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('SHIFT_REQUESTS') 
 @ApiBearerAuth()
 export class ShiftRequestsController {
   constructor(private readonly shiftRequestsService: ShiftRequestsService) {}
