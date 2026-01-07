@@ -5,7 +5,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Break Compliance')
 @Controller('break-compliance')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('BREAK_COMPLIANCE')
 @ApiBearerAuth()
 export class BreakComplianceController {
   constructor(private readonly breakComplianceService: BreakComplianceService) {}
