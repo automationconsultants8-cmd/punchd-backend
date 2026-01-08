@@ -112,4 +112,27 @@ export class AuthController {
       isWarningPeriod,
     };
   }
+
+  @Post('reset-database-test')
+  @HttpCode(HttpStatus.OK)
+  async resetDatabaseTest() {
+    await this.prisma.auditLog.deleteMany();
+    await this.prisma.breakViolation.deleteMany();
+    await this.prisma.faceVerificationLog.deleteMany();
+    await this.prisma.timeEntry.deleteMany();
+    await this.prisma.shiftRequest.deleteMany();
+    await this.prisma.timeOffRequest.deleteMany();
+    await this.prisma.message.deleteMany();
+    await this.prisma.shift.deleteMany();
+    await this.prisma.workerJobRate.deleteMany();
+    await this.prisma.certifiedPayroll.deleteMany();
+    await this.prisma.violation.deleteMany();
+    await this.prisma.job.deleteMany();
+    await this.prisma.passwordResetToken.deleteMany();
+    await this.prisma.pushToken.deleteMany();
+    await this.prisma.user.deleteMany();
+    await this.prisma.company.deleteMany();
+    
+    return { success: true, message: 'Database reset complete' };
+  }
 }
