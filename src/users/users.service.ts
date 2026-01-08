@@ -282,6 +282,58 @@ export class UsersService {
     });
   }
 
+  async approveWorker(companyId: string, userId: string, performedBy?: string) {
+    const user = await this.findOne(companyId, userId);
+
+    if (user.approvalStatus === 'APPROVED') {
+      return user;
+    }
+
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: { 
+        approvalStatus: 'APPROVED',
+        isActive: true,
+      },
+      include: { company: true },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId: performedBy,
+      action: 'USER_APPROVED',
+      targetType: 'USER',
+      targetId: userId,
+      details: { userName: user.name },
+    });
+
+    return updatedUser;
+  }
+
+  async declineWorker(companyId: string, userId: string, performedBy?: string) {
+    const user = await this.findOne(companyId, userId);
+
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: { 
+        approvalStatus: 'REJECTED',
+        isActive: false,
+      },
+      include: { company: true },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId: performedBy,
+      action: 'USER_REJECTED',
+      targetType: 'USER',
+      targetId: userId,
+      details: { userName: user.name },
+    });
+
+    return updatedUser;
+  }
+
   async getWorkerJobRates(companyId: string, userId: string) {
     await this.findOne(companyId, userId);
 
