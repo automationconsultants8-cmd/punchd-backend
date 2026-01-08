@@ -72,7 +72,7 @@ export class TimeEntriesService {
         photoUrl = await this.awsService.uploadPhoto(dto.photoUrl, userId, 'clock-in');
       } catch (err) {
         console.error('Failed to upload photo to S3:', err);
-        flagReasons.push('PHOTO_UPLOAD_FAILED');
+        // Don't flag for S3 upload failure - photo was still verified locally
       }
     }
 
@@ -85,8 +85,8 @@ export class TimeEntriesService {
         clockInLocation: `${dto.latitude},${dto.longitude}`,
         clockInPhotoUrl: photoUrl,
         isFlagged: flagReasons.length > 0,
-        flagReason: flagReasons.join(', '),
-        approvalStatus: 'PENDING',
+        flagReason: flagReasons.length > 0 ? flagReasons.join(', ') : null,
+        approvalStatus: flagReasons.length > 0 ? 'PENDING' : 'APPROVED',
       },
       include: {
         job: true,
@@ -165,6 +165,7 @@ export class TimeEntriesService {
           data: {
             isFlagged: true,
             flagReason: updatedFlagReasons,
+            approvalStatus: 'PENDING',
           },
         });
       }
@@ -645,7 +646,9 @@ export class TimeEntriesService {
         durationMinutes: workMinutes,
         breakMinutes: dto.breakMinutes || 0,
         notes: dto.notes,
-        approvalStatus: 'PENDING',
+        approvalStatus: 'APPROVED',
+        approvedById: createdById,
+        approvedAt: new Date(),
         regularMinutes: overtimeCalc.regularMinutes,
         overtimeMinutes: overtimeCalc.overtimeMinutes,
         doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
