@@ -55,9 +55,6 @@ export class TimeEntriesService {
       );
 
       if (!geofenceCheck.isWithin) {
-        flagReasons.push(
-          `OUTSIDE_GEOFENCE: ${geofenceCheck.distance}m from job site (allowed: ${job.geofenceRadiusMeters}m)`,
-        );
         throw new ForbiddenException(
           `Clock-in denied: You are ${geofenceCheck.distance}m from the job site. Must be within ${job.geofenceRadiusMeters}m.`,
         );
@@ -66,15 +63,8 @@ export class TimeEntriesService {
       jobId = dto.jobId;
     }
 
-    let photoUrl = 'placeholder.jpg';
-    if (dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
-      try {
-        photoUrl = await this.awsService.uploadPhoto(dto.photoUrl, userId, 'clock-in');
-      } catch (err) {
-        console.error('Failed to upload photo to S3:', err);
-        // Don't flag for S3 upload failure - photo was still verified locally
-      }
-    }
+    // Skip S3 upload - photos verified locally but not stored
+    const photoUrl = 'verified-locally';
 
     const timeEntry = await this.prisma.timeEntry.create({
       data: {
@@ -94,11 +84,12 @@ export class TimeEntriesService {
       },
     });
 
-    if (user?.referencePhotoUrl && photoUrl !== 'placeholder.jpg') {
+    // Face verification
+    if (user?.referencePhotoUrl && dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
       try {
         const confidence = await this.awsService.compareFaces(
           user.referencePhotoUrl,
-          photoUrl,
+          dto.photoUrl,
         );
 
         const matched = confidence >= 80;
@@ -108,7 +99,7 @@ export class TimeEntriesService {
             companyId,
             userId,
             timeEntryId: timeEntry.id,
-            submittedPhotoUrl: photoUrl,
+            submittedPhotoUrl: 'verified-locally',
             confidenceScore: confidence,
             matched,
             rekognitionResponse: { confidence, matched },
@@ -138,7 +129,7 @@ export class TimeEntriesService {
                   user.phone,
                   jobName,
                   confidence,
-                  photoUrl,
+                  'photo-not-stored',
                 );
               } catch (emailErr) {
                 console.error('Failed to send buddy punch alert:', emailErr);
@@ -156,23 +147,20 @@ export class TimeEntriesService {
         }
 
         console.error('Face verification error:', err);
-        const updatedFlagReasons = timeEntry.flagReason
-          ? `${timeEntry.flagReason}, FACE_VERIFICATION_ERROR`
-          : 'FACE_VERIFICATION_ERROR';
-
         await this.prisma.timeEntry.update({
           where: { id: timeEntry.id },
           data: {
             isFlagged: true,
-            flagReason: updatedFlagReasons,
+            flagReason: 'FACE_VERIFICATION_ERROR',
             approvalStatus: 'PENDING',
           },
         });
       }
-    } else if (!user?.referencePhotoUrl && photoUrl !== 'placeholder.jpg') {
+    } else if (!user?.referencePhotoUrl && dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
+      // Store base64 reference photo directly for new users (first clock-in)
       await this.prisma.user.update({
         where: { id: userId },
-        data: { referencePhotoUrl: photoUrl },
+        data: { referencePhotoUrl: dto.photoUrl },
       });
     }
 
@@ -198,14 +186,8 @@ export class TimeEntriesService {
     const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
     const workMinutes = totalMinutes - (activeEntry.breakMinutes || 0);
 
-    let photoUrl = 'placeholder.jpg';
-    if (dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
-      try {
-        photoUrl = await this.awsService.uploadPhoto(dto.photoUrl, userId, 'clock-out');
-      } catch (err) {
-        console.error('Failed to upload photo to S3:', err);
-      }
-    }
+    // Skip S3 upload - photos verified locally but not stored
+    const photoUrl = 'verified-locally';
 
     const overtimeCalc = await this.calculateOvertimeForEntry(
       userId,
