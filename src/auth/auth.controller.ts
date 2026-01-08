@@ -1,11 +1,15 @@
 import { Controller, Post, Body, Get, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private prisma: PrismaService
+  ) {}
 
   @Post('send-otp')
   @HttpCode(HttpStatus.OK)
@@ -46,14 +50,16 @@ export class AuthController {
   async getCompanies() {
     return this.authService.getCompanies();
   }
-}
-@Post('set-trial-test')
-async setTrialTest(@Body() body: { days: number }) {
-  const companies = await this.prisma.company.updateMany({
-    data: {
-      subscriptionTier: 'trial',
-      trialEndsAt: new Date(Date.now() + (body.days || 2) * 24 * 60 * 60 * 1000)
-    }
-  });
-  return { updated: companies.count };
+
+  @Post('set-trial-test')
+  @HttpCode(HttpStatus.OK)
+  async setTrialTest(@Body() body: { days: number }) {
+    const companies = await this.prisma.company.updateMany({
+      data: {
+        subscriptionTier: 'trial',
+        trialEndsAt: new Date(Date.now() + (body.days || 2) * 24 * 60 * 60 * 1000)
+      }
+    });
+    return { updated: companies.count };
+  }
 }
