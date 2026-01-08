@@ -48,8 +48,21 @@ export class UsersController {
     return this.usersService.remove(req.user.companyId, id, req.user.userId);
   }
 
-  // ============ PAY RATE ENDPOINTS ============
+  @Patch(':id/approve')
+  @Roles('OWNER', 'ADMIN')
+  @ApiOperation({ summary: 'Approve a pending worker' })
+  approve(@Request() req, @Param('id') id: string) {
+    return this.usersService.approveWorker(req.user.companyId, id, req.user.userId);
+  }
 
+  @Patch(':id/decline')
+  @Roles('OWNER', 'ADMIN')
+  @ApiOperation({ summary: 'Decline a pending worker' })
+  decline(@Request() req, @Param('id') id: string) {
+    return this.usersService.declineWorker(req.user.companyId, id, req.user.userId);
+  }
+
+  // ============ PAY RATE ENDPOINTS ============
   @Get(':id/rates')
   @Roles('OWNER', 'ADMIN', 'MANAGER')
   @ApiOperation({ summary: 'Get all job-specific rates for a worker' })
