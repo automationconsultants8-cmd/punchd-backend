@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { RekognitionClient, CompareFacesCommand } from '@aws-sdk/client-rekognition';
 import * as crypto from 'crypto';
 
@@ -34,11 +34,9 @@ export class AwsService {
   }
 
   async uploadPhoto(base64Photo: string, userId: string, type: 'clock-in' | 'clock-out'): Promise<string> {
-    // Remove base64 prefix if present
     const base64Data = base64Photo.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
 
-    // Generate unique filename
     const timestamp = Date.now();
     const random = crypto.randomBytes(8).toString('hex');
     const filename = `${userId}/${type}/${timestamp}-${random}.jpg`;
@@ -52,33 +50,23 @@ export class AwsService {
 
     await this.s3Client.send(command);
 
-    // Return public URL
     return `https://${this.bucketName}.s3.${this.region}.amazonaws.com/${filename}`;
   }
 
-  async compareFaces(sourceImageUrl: string, targetImageUrl: string): Promise<number> {
+  async compareFaces(sourceImage: string, targetImage: string): Promise<number> {
     try {
-      // Extract S3 keys from URLs
-      const sourceKey = this.extractKeyFromUrl(sourceImageUrl);
-      const targetKey = this.extractKeyFromUrl(targetImageUrl);
-
       console.log('Comparing faces...');
-      console.log('Source key:', sourceKey);
-      console.log('Target key:', targetKey);
+      
+      // Convert base64 to buffer for both images
+      const sourceBuffer = this.base64ToBuffer(sourceImage);
+      const targetBuffer = this.base64ToBuffer(targetImage);
 
-      // Use S3 object references directly (more reliable than downloading)
       const command = new CompareFacesCommand({
         SourceImage: {
-          S3Object: {
-            Bucket: this.bucketName,
-            Name: sourceKey,
-          },
+          Bytes: sourceBuffer,
         },
         TargetImage: {
-          S3Object: {
-            Bucket: this.bucketName,
-            Name: targetKey,
-          },
+          Bytes: targetBuffer,
         },
         SimilarityThreshold: 80,
       });
@@ -91,7 +79,7 @@ export class AwsService {
         return similarity !== undefined ? similarity : 0;
       }
 
-      console.log('No face match found');
+      console.log('No face match found - faces do not match');
       return 0;
     } catch (error) {
       console.error('Rekognition error:', error.message);
@@ -99,12 +87,19 @@ export class AwsService {
     }
   }
 
-  private extractKeyFromUrl(url: string): string {
-    // URL format: https://bucket.s3.region.amazonaws.com/key
-    const urlParts = url.split('.amazonaws.com/');
-    if (urlParts.length > 1) {
-      return decodeURIComponent(urlParts[1]);
+  private base64ToBuffer(input: string): Buffer {
+    // Check if it's a base64 data URL
+    if (input.startsWith('data:image')) {
+      const base64Data = input.replace(/^data:image\/\w+;base64,/, '');
+      return Buffer.from(base64Data, 'base64');
     }
-    return url;
+    
+    // Check if it's an S3 URL (legacy)
+    if (input.startsWith('https://')) {
+      throw new Error('S3 URLs no longer supported - use base64');
+    }
+    
+    // Assume it's raw base64
+    return Buffer.from(input, 'base64');
   }
 }
