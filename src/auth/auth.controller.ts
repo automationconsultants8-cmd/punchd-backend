@@ -1,14 +1,16 @@
-import { Controller, Post, Body, Get, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, Get, HttpCode, HttpStatus, Req, UnauthorizedException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { JwtService } from '@nestjs/jwt';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
   constructor(
     private authService: AuthService,
-    private prisma: PrismaService
+    private prisma: PrismaService,
+    private jwtService: JwtService,
   ) {}
 
   @Post('send-otp')
@@ -61,5 +63,53 @@ export class AuthController {
       }
     });
     return { updated: companies.count };
+  }
+
+  @Get('subscription-status')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Check subscription status for mobile workers' })
+  async getSubscriptionStatus(@Req() req) {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    let decoded;
+    try {
+      decoded = this.jwtService.verify(token);
+    } catch {
+      throw new UnauthorizedException('Invalid token');
+    }
+    
+    const user = await this.prisma.user.findUnique({
+      where: { id: decoded.userId },
+      include: { company: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const company = user.company;
+    const now = new Date();
+    const daysRemaining = company.trialEndsAt 
+      ? Math.max(0, Math.ceil((new Date(company.trialEndsAt).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+      : null;
+    
+    const trialExpired = company.trialEndsAt && new Date(company.trialEndsAt) < now;
+    const isWarningPeriod = daysRemaining !== null && daysRemaining <= 2 && daysRemaining > 0;
+    const isActive = company.subscriptionStatus === 'active' || 
+                     (company.subscriptionStatus === 'trial' && !trialExpired);
+
+    return {
+      status: company.subscriptionStatus,
+      tier: company.subscriptionTier,
+      trialEndsAt: company.trialEndsAt,
+      trialExpired,
+      isActive,
+      daysRemaining,
+      isWarningPeriod,
+    };
   }
 }
