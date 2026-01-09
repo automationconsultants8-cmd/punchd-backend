@@ -79,7 +79,7 @@ export class MessagesService {
         { recipientId: userId },
         { 
           recipientId: null,
-          senderId: { not: userId } // Exclude my own broadcasts from inbox
+          senderId: { not: userId }
         },
       ];
     }
@@ -157,7 +157,7 @@ export class MessagesService {
         companyId,
         OR: [
           { recipientId: userId },
-          { recipientId: null },
+          { recipientId: null, senderId: { not: userId } },
         ],
         isRead: false,
       },
@@ -174,24 +174,53 @@ export class MessagesService {
         companyId,
         OR: [
           { recipientId: userId },
-          { recipientId: null },
+          { recipientId: null, senderId: { not: userId } },
         ],
         isRead: false,
       },
     });
   }
 
-  // For admins: Get all messages sent to admins (broadcast)
   async findAdminMessages(companyId: string) {
     return this.prisma.message.findMany({
       where: {
         companyId,
-        recipientId: null, // Broadcast to admins
+        recipientId: null,
       },
       include: {
         sender: true,
       },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  async delete(id: string, userId: string, companyId: string) {
+    const message = await this.prisma.message.findFirst({
+      where: { id, companyId },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    // User can delete if they sent it or received it
+    if (message.senderId !== userId && message.recipientId !== userId && message.recipientId !== null) {
+      throw new ForbiddenException('You can only delete your own messages');
+    }
+
+    await this.prisma.message.delete({
+      where: { id },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId,
+      action: 'MESSAGE_DELETED',
+      targetType: 'Message',
+      targetId: id,
+      details: {},
+    });
+
+    return { success: true };
   }
 }
