@@ -12,26 +12,123 @@ export class ShiftsService {
     private notificationsService: NotificationsService,
   ) {}
 
+  // Helper to parse date and time strings into Date objects
+  private parseShiftDates(date: string | Date, startTime: string | Date, endTime: string | Date) {
+    let shiftDate: Date;
+    let start: Date;
+    let end: Date;
+
+    // Parse shiftDate
+    if (date instanceof Date) {
+      shiftDate = date;
+    } else if (typeof date === 'string') {
+      // Handle "2026-01-09" format
+      shiftDate = new Date(date + 'T00:00:00');
+    } else {
+      throw new BadRequestException('Invalid date format');
+    }
+
+    // Parse startTime
+    if (startTime instanceof Date) {
+      start = startTime;
+    } else if (typeof startTime === 'string') {
+      // Handle "08:00" or "08:00 AM" format
+      if (startTime.includes(':') && !startTime.includes('T')) {
+        const timePart = this.parseTimeString(startTime);
+        start = new Date(shiftDate);
+        start.setHours(timePart.hours, timePart.minutes, 0, 0);
+      } else {
+        start = new Date(startTime);
+      }
+    } else {
+      throw new BadRequestException('Invalid startTime format');
+    }
+
+    // Parse endTime
+    if (endTime instanceof Date) {
+      end = endTime;
+    } else if (typeof endTime === 'string') {
+      // Handle "17:00" or "05:00 PM" format
+      if (endTime.includes(':') && !endTime.includes('T')) {
+        const timePart = this.parseTimeString(endTime);
+        end = new Date(shiftDate);
+        end.setHours(timePart.hours, timePart.minutes, 0, 0);
+      } else {
+        end = new Date(endTime);
+      }
+    } else {
+      throw new BadRequestException('Invalid endTime format');
+    }
+
+    // Validate dates
+    if (isNaN(shiftDate.getTime())) {
+      throw new BadRequestException('Invalid shift date');
+    }
+    if (isNaN(start.getTime())) {
+      throw new BadRequestException('Invalid start time');
+    }
+    if (isNaN(end.getTime())) {
+      throw new BadRequestException('Invalid end time');
+    }
+
+    return { shiftDate, startTime: start, endTime: end };
+  }
+
+  private parseTimeString(timeStr: string): { hours: number; minutes: number } {
+    // Handle "08:00 AM", "5:00 PM", "17:00" formats
+    let hours = 0;
+    let minutes = 0;
+
+    const upperTime = timeStr.toUpperCase().trim();
+    const isPM = upperTime.includes('PM');
+    const isAM = upperTime.includes('AM');
+
+    // Remove AM/PM
+    const cleanTime = upperTime.replace(/\s*(AM|PM)\s*/i, '').trim();
+    const parts = cleanTime.split(':');
+
+    hours = parseInt(parts[0], 10);
+    minutes = parts[1] ? parseInt(parts[1], 10) : 0;
+
+    // Convert to 24-hour format
+    if (isPM && hours !== 12) {
+      hours += 12;
+    } else if (isAM && hours === 12) {
+      hours = 0;
+    }
+
+    return { hours, minutes };
+  }
+
   async create(data: {
     companyId: string;
     userId?: string;
     jobId: string;
-    shiftDate: Date;
-    startTime: Date;
-    endTime: Date;
+    date?: string | Date;
+    shiftDate?: string | Date;
+    startTime: string | Date;
+    endTime: string | Date;
     notes?: string;
     isOpen?: boolean;
   }) {
+    // Use date or shiftDate (frontend might send either)
+    const dateValue = data.date || data.shiftDate;
+    if (!dateValue) {
+      throw new BadRequestException('Date is required');
+    }
+
+    const parsed = this.parseShiftDates(dateValue, data.startTime, data.endTime);
+
     const shift = await this.prisma.shift.create({
       data: {
         companyId: data.companyId,
         userId: data.userId || null,
         jobId: data.jobId,
-        shiftDate: data.shiftDate,
-        startTime: data.startTime,
-        endTime: data.endTime,
-        notes: data.notes,
-        isOpen: data.isOpen || !data.userId, // Auto-set isOpen if no user assigned
+        shiftDate: parsed.shiftDate,
+        startTime: parsed.startTime,
+        endTime: parsed.endTime,
+        notes: data.notes || '',
+        isOpen: data.isOpen || !data.userId,
         status: data.isOpen || !data.userId ? 'OPEN' : 'SCHEDULED',
       },
       include: {
@@ -48,16 +145,15 @@ export class ShiftsService {
       targetId: shift.id,
       details: {
         jobId: data.jobId,
-        shiftDate: data.shiftDate,
+        shiftDate: parsed.shiftDate,
         isOpen: shift.isOpen,
       },
     });
 
-    // Notify assigned user if not open
     if (data.userId && !shift.isOpen) {
       const jobName = shift.job?.name || 'a job site';
-      const shiftDateStr = new Date(data.shiftDate).toLocaleDateString();
-      const startTimeStr = new Date(data.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const shiftDateStr = parsed.shiftDate.toLocaleDateString();
+      const startTimeStr = parsed.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       await this.notificationsService.notifyNewShift(data.userId, jobName, shiftDateStr, startTimeStr);
     }
 
@@ -141,11 +237,6 @@ export class ShiftsService {
     });
   }
 
-  // =============================================
-  // OPEN SHIFTS FUNCTIONALITY
-  // =============================================
-
-  // Get all open shifts for a company (available for claiming)
   async findOpenShifts(companyId: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -155,7 +246,7 @@ export class ShiftsService {
         companyId,
         isOpen: true,
         status: 'OPEN',
-        shiftDate: { gte: today }, // Only future shifts
+        shiftDate: { gte: today },
       },
       include: {
         job: true,
@@ -167,7 +258,6 @@ export class ShiftsService {
     });
   }
 
-  // Worker claims an open shift
   async claimShift(shiftId: string, userId: string, companyId: string) {
     const shift = await this.prisma.shift.findUnique({
       where: { id: shiftId },
@@ -190,7 +280,6 @@ export class ShiftsService {
       throw new BadRequestException('This shift has already been claimed');
     }
 
-    // Check if user already has a shift at the same time
     const conflictingShift = await this.prisma.shift.findFirst({
       where: {
         userId,
@@ -209,7 +298,6 @@ export class ShiftsService {
       throw new BadRequestException('You already have a shift during this time');
     }
 
-    // Claim the shift
     const updatedShift = await this.prisma.shift.update({
       where: { id: shiftId },
       data: {
@@ -235,7 +323,6 @@ export class ShiftsService {
       },
     });
 
-    // Notify admins that shift was claimed
     const worker = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { name: true },
@@ -263,7 +350,6 @@ export class ShiftsService {
     return updatedShift;
   }
 
-  // Create an open shift (admin)
   async createOpenShift(data: {
     companyId: string;
     jobId: string;
@@ -278,7 +364,6 @@ export class ShiftsService {
     });
   }
 
-  // Mark existing shift as open (when worker drops)
   async markAsOpen(shiftId: string, adminId: string) {
     const shift = await this.findOne(shiftId);
 
@@ -307,10 +392,6 @@ export class ShiftsService {
     return updatedShift;
   }
 
-  // =============================================
-  // EXISTING METHODS
-  // =============================================
-
   async update(id: string, data: {
     userId?: string;
     jobId?: string;
@@ -327,7 +408,6 @@ export class ShiftsService {
       where: { id },
       data: {
         ...data,
-        // If assigning a user, mark as not open
         ...(data.userId && { isOpen: false, status: 'SCHEDULED' }),
       },
       include: {
@@ -345,7 +425,6 @@ export class ShiftsService {
       details: data,
     });
 
-    // Notify user if newly assigned
     if (data.userId && data.userId !== shift.userId) {
       const jobName = updatedShift.job?.name || 'a job site';
       const shiftDateStr = new Date(updatedShift.shiftDate).toLocaleDateString();
@@ -359,7 +438,6 @@ export class ShiftsService {
   async delete(id: string, deletedById: string) {
     const shift = await this.findOne(id);
 
-    // Notify user if shift was assigned
     if (shift.userId) {
       const jobName = shift.job?.name || 'a job site';
       const shiftDateStr = new Date(shift.shiftDate).toLocaleDateString();
