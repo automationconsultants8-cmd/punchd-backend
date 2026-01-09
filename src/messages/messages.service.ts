@@ -212,6 +212,9 @@ export class MessagesService {
       where: { id },
     });
 
+    return { success: true };
+  }
+
     await this.auditService.log({
       companyId,
       userId,
