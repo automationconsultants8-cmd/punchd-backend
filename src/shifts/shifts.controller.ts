@@ -13,7 +13,6 @@ export class ShiftsController {
 
   // Helper to parse time string "08:00" or "08:00 AM" with a date
   private parseDateTime(dateStr: string, timeStr: string): Date {
-    // Parse time - handle "08:00", "8:00 AM", "17:00", "5:00 PM"
     let hours = 0;
     let minutes = 0;
     
@@ -33,12 +32,11 @@ export class ShiftsController {
       hours = 0;
     }
     
-    // Create date string in ISO format to avoid timezone issues
     const hoursStr = hours.toString().padStart(2, '0');
     const minutesStr = minutes.toString().padStart(2, '0');
     
-    // Store as UTC but with the intended local time values
-    return new Date(`${dateStr}T${hoursStr}:${minutesStr}:00.000Z`);
+    // Create date without Z suffix to avoid timezone shift
+    return new Date(`${dateStr}T${hoursStr}:${minutesStr}:00`);
   }
 
   @Post()
@@ -61,7 +59,8 @@ export class ShiftsController {
       throw new BadRequestException('Date is required');
     }
 
-    const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
+    // Use noon to avoid date shifting due to timezone
+    const shiftDate = new Date(`${dateStr}T12:00:00`);
     const startTime = this.parseDateTime(dateStr, dto.startTime);
     const endTime = this.parseDateTime(dateStr, dto.endTime);
 
@@ -95,7 +94,7 @@ export class ShiftsController {
       throw new BadRequestException('Date is required');
     }
 
-    const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
+    const shiftDate = new Date(`${dateStr}T12:00:00`);
     const startTime = this.parseDateTime(dateStr, dto.startTime);
     const endTime = this.parseDateTime(dateStr, dto.endTime);
 
@@ -224,7 +223,7 @@ export class ShiftsController {
       {
         userId: dto.userId,
         jobId: dto.jobId,
-        shiftDate: dto.shiftDate ? new Date(dto.shiftDate) : undefined,
+        shiftDate: dto.shiftDate ? new Date(`${dto.shiftDate}T12:00:00`) : undefined,
         startTime: dto.startTime ? new Date(dto.startTime) : undefined,
         endTime: dto.endTime ? new Date(dto.endTime) : undefined,
         status: dto.status,
