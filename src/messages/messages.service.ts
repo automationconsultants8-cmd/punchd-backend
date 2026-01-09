@@ -71,11 +71,16 @@ export class MessagesService {
     const where: any = { companyId };
 
     if (filters?.sent) {
+      // Sent messages: only messages I sent
       where.senderId = userId;
     } else {
+      // Inbox: messages sent TO me, or broadcasts NOT sent by me
       where.OR = [
         { recipientId: userId },
-        { recipientId: null }, // Broadcast messages
+        { 
+          recipientId: null,
+          senderId: { not: userId } // Exclude my own broadcasts from inbox
+        },
       ];
     }
 
