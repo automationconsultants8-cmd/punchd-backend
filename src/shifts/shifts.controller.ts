@@ -11,6 +11,34 @@ import { ShiftStatus } from '@prisma/client';
 export class ShiftsController {
   constructor(private readonly shiftsService: ShiftsService) {}
 
+  // Helper to parse time string "08:00" or "08:00 AM" with a date
+  private parseDateTime(dateStr: string, timeStr: string): Date {
+    const date = new Date(dateStr + 'T00:00:00');
+    
+    // Parse time - handle "08:00", "8:00 AM", "17:00", "5:00 PM"
+    let hours = 0;
+    let minutes = 0;
+    
+    const upperTime = timeStr.toUpperCase().trim();
+    const isPM = upperTime.includes('PM');
+    const isAM = upperTime.includes('AM');
+    
+    const cleanTime = upperTime.replace(/\s*(AM|PM)\s*/i, '').trim();
+    const parts = cleanTime.split(':');
+    
+    hours = parseInt(parts[0], 10);
+    minutes = parts[1] ? parseInt(parts[1], 10) : 0;
+    
+    if (isPM && hours !== 12) {
+      hours += 12;
+    } else if (isAM && hours === 12) {
+      hours = 0;
+    }
+    
+    date.setHours(hours, minutes, 0, 0);
+    return date;
+  }
+
   @Post()
   @ApiOperation({ summary: 'Create a shift' })
   create(
@@ -18,20 +46,30 @@ export class ShiftsController {
     @Body() dto: {
       userId?: string;
       jobId: string;
-      shiftDate: string;
+      date?: string;
+      shiftDate?: string;
       startTime: string;
       endTime: string;
       notes?: string;
       isOpen?: boolean;
     },
   ) {
+    const dateStr = dto.date || dto.shiftDate;
+    if (!dateStr) {
+      throw new Error('Date is required');
+    }
+
+    const shiftDate = new Date(dateStr + 'T00:00:00');
+    const startTime = this.parseDateTime(dateStr, dto.startTime);
+    const endTime = this.parseDateTime(dateStr, dto.endTime);
+
     return this.shiftsService.create({
       companyId: req.user.companyId,
       userId: dto.userId,
       jobId: dto.jobId,
-      shiftDate: new Date(dto.shiftDate),
-      startTime: new Date(dto.startTime),
-      endTime: new Date(dto.endTime),
+      shiftDate,
+      startTime,
+      endTime,
       notes: dto.notes,
       isOpen: dto.isOpen,
     });
@@ -43,18 +81,28 @@ export class ShiftsController {
     @Request() req,
     @Body() dto: {
       jobId: string;
-      shiftDate: string;
+      date?: string;
+      shiftDate?: string;
       startTime: string;
       endTime: string;
       notes?: string;
     },
   ) {
+    const dateStr = dto.date || dto.shiftDate;
+    if (!dateStr) {
+      throw new Error('Date is required');
+    }
+
+    const shiftDate = new Date(dateStr + 'T00:00:00');
+    const startTime = this.parseDateTime(dateStr, dto.startTime);
+    const endTime = this.parseDateTime(dateStr, dto.endTime);
+
     return this.shiftsService.createOpenShift({
       companyId: req.user.companyId,
       jobId: dto.jobId,
-      shiftDate: new Date(dto.shiftDate),
-      startTime: new Date(dto.startTime),
-      endTime: new Date(dto.endTime),
+      shiftDate,
+      startTime,
+      endTime,
       notes: dto.notes,
     });
   }
@@ -90,6 +138,24 @@ export class ShiftsController {
   @ApiOperation({ summary: 'Get all open shifts available for claiming' })
   findOpenShifts(@Request() req) {
     return this.shiftsService.findOpenShifts(req.user.companyId);
+  }
+
+  @Get('user/:userId')
+  @ApiOperation({ summary: 'Get shifts for a specific user' })
+  @ApiQuery({ name: 'startDate', required: false })
+  @ApiQuery({ name: 'endDate', required: false })
+  @ApiQuery({ name: 'status', required: false, enum: ShiftStatus })
+  findByUser(
+    @Param('userId') userId: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('status') status?: ShiftStatus,
+  ) {
+    return this.shiftsService.findByUser(userId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      status,
+    });
   }
 
   @Get('my-shifts')
