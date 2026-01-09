@@ -48,7 +48,6 @@ export class MessagesService {
       },
     });
 
-    // Send push notification to recipient
     if (data.recipientId) {
       const sender = await this.prisma.user.findUnique({
         where: { id: data.senderId },
@@ -71,10 +70,8 @@ export class MessagesService {
     const where: any = { companyId };
 
     if (filters?.sent) {
-      // Sent messages: only messages I sent
       where.senderId = userId;
     } else {
-      // Inbox: messages sent TO me, or broadcasts NOT sent by me
       where.OR = [
         { recipientId: userId },
         { 
@@ -123,7 +120,6 @@ export class MessagesService {
       throw new NotFoundException('Message not found');
     }
 
-    // Check if user has access
     if (message.senderId !== userId && message.recipientId !== userId && message.recipientId !== null) {
       throw new ForbiddenException('You do not have access to this message');
     }
@@ -203,25 +199,12 @@ export class MessagesService {
       throw new NotFoundException('Message not found');
     }
 
-    // User can delete if they sent it or received it
     if (message.senderId !== userId && message.recipientId !== userId && message.recipientId !== null) {
       throw new ForbiddenException('You can only delete your own messages');
     }
 
     await this.prisma.message.delete({
       where: { id },
-    });
-
-    return { success: true };
-  }
-
-    await this.auditService.log({
-      companyId,
-      userId,
-      action: 'MESSAGE_DELETED',
-      targetType: 'Message',
-      targetId: id,
-      details: {},
     });
 
     return { success: true };
