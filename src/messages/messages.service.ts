@@ -63,30 +63,19 @@ export class MessagesService {
     return message;
   }
 
-  async findAll(companyId: string, userId: string, filters?: {
-    isRead?: boolean;
-    sent?: boolean;
-  }) {
-    const where: any = { companyId };
-
-    if (filters?.sent) {
-      where.senderId = userId;
-    } else {
-      where.OR = [
-        { recipientId: userId },
-        { 
-          recipientId: null,
-          senderId: { not: userId }
-        },
-      ];
-    }
-
-    if (filters?.isRead !== undefined) {
-      where.isRead = filters.isRead;
-    }
-
+  // Get messages sent TO this user (inbox)
+  async findInbox(companyId: string, userId: string) {
     return this.prisma.message.findMany({
-      where,
+      where: {
+        companyId,
+        OR: [
+          { recipientId: userId }, // Direct messages to me
+          { 
+            recipientId: null, // Broadcast messages
+            senderId: { not: userId } // But NOT sent by me
+          },
+        ],
+      },
       include: {
         sender: true,
         recipient: true,
@@ -95,16 +84,40 @@ export class MessagesService {
     });
   }
 
-  async findInbox(companyId: string, userId: string) {
-    return this.findAll(companyId, userId, { sent: false });
-  }
-
+  // Get messages sent BY this user (sent)
   async findSent(companyId: string, userId: string) {
-    return this.findAll(companyId, userId, { sent: true });
+    return this.prisma.message.findMany({
+      where: {
+        companyId,
+        senderId: userId, // Only messages I sent
+      },
+      include: {
+        sender: true,
+        recipient: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   async findUnread(companyId: string, userId: string) {
-    return this.findAll(companyId, userId, { isRead: false });
+    return this.prisma.message.findMany({
+      where: {
+        companyId,
+        OR: [
+          { recipientId: userId },
+          { 
+            recipientId: null,
+            senderId: { not: userId }
+          },
+        ],
+        isRead: false,
+      },
+      include: {
+        sender: true,
+        recipient: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   async findOne(id: string, userId: string) {
