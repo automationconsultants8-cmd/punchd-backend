@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Request, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShiftsService } from './shifts.service';
@@ -13,8 +13,6 @@ export class ShiftsController {
 
   // Helper to parse time string "08:00" or "08:00 AM" with a date
   private parseDateTime(dateStr: string, timeStr: string): Date {
-    const date = new Date(dateStr + 'T00:00:00');
-    
     // Parse time - handle "08:00", "8:00 AM", "17:00", "5:00 PM"
     let hours = 0;
     let minutes = 0;
@@ -35,8 +33,12 @@ export class ShiftsController {
       hours = 0;
     }
     
-    date.setHours(hours, minutes, 0, 0);
-    return date;
+    // Create date string in ISO format to avoid timezone issues
+    const hoursStr = hours.toString().padStart(2, '0');
+    const minutesStr = minutes.toString().padStart(2, '0');
+    
+    // Store as UTC but with the intended local time values
+    return new Date(`${dateStr}T${hoursStr}:${minutesStr}:00.000Z`);
   }
 
   @Post()
@@ -56,10 +58,10 @@ export class ShiftsController {
   ) {
     const dateStr = dto.date || dto.shiftDate;
     if (!dateStr) {
-      throw new Error('Date is required');
+      throw new BadRequestException('Date is required');
     }
 
-    const shiftDate = new Date(dateStr + 'T00:00:00');
+    const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
     const startTime = this.parseDateTime(dateStr, dto.startTime);
     const endTime = this.parseDateTime(dateStr, dto.endTime);
 
@@ -90,10 +92,10 @@ export class ShiftsController {
   ) {
     const dateStr = dto.date || dto.shiftDate;
     if (!dateStr) {
-      throw new Error('Date is required');
+      throw new BadRequestException('Date is required');
     }
 
-    const shiftDate = new Date(dateStr + 'T00:00:00');
+    const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
     const startTime = this.parseDateTime(dateStr, dto.startTime);
     const endTime = this.parseDateTime(dateStr, dto.endTime);
 
