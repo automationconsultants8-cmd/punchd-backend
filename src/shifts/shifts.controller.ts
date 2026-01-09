@@ -11,32 +11,21 @@ import { ShiftStatus } from '@prisma/client';
 export class ShiftsController {
   constructor(private readonly shiftsService: ShiftsService) {}
 
-  // Helper to parse time string "08:00" or "08:00 AM" with a date
-  private parseDateTime(dateStr: string, timeStr: string): Date {
-    let hours = 0;
-    let minutes = 0;
+  // Parse time string and combine with date - store exactly as entered (no timezone conversion)
+  private createShiftDateTime(dateStr: string, timeStr: string): Date {
+    // dateStr: "2026-01-08"
+    // timeStr: "07:00" or "15:30"
     
-    const upperTime = timeStr.toUpperCase().trim();
-    const isPM = upperTime.includes('PM');
-    const isAM = upperTime.includes('AM');
+    // Parse time
+    const [hours, minutes] = timeStr.split(':').map(Number);
     
-    const cleanTime = upperTime.replace(/\s*(AM|PM)\s*/i, '').trim();
-    const parts = cleanTime.split(':');
-    
-    hours = parseInt(parts[0], 10);
-    minutes = parts[1] ? parseInt(parts[1], 10) : 0;
-    
-    if (isPM && hours !== 12) {
-      hours += 12;
-    } else if (isAM && hours === 12) {
-      hours = 0;
-    }
-    
+    // Create ISO string that preserves the intended local time
+    // By appending 'Z' we're saying "store this exact time as UTC"
+    // So 7:00 AM PST stored as 7:00 AM UTC (we'll display it without conversion)
     const hoursStr = hours.toString().padStart(2, '0');
     const minutesStr = minutes.toString().padStart(2, '0');
     
-    // Create date without Z suffix to avoid timezone shift
-    return new Date(`${dateStr}T${hoursStr}:${minutesStr}:00`);
+    return new Date(`${dateStr}T${hoursStr}:${minutesStr}:00.000Z`);
   }
 
   @Post()
@@ -59,10 +48,10 @@ export class ShiftsController {
       throw new BadRequestException('Date is required');
     }
 
-    // Use noon to avoid date shifting due to timezone
-    const shiftDate = new Date(`${dateStr}T12:00:00`);
-    const startTime = this.parseDateTime(dateStr, dto.startTime);
-    const endTime = this.parseDateTime(dateStr, dto.endTime);
+    // Store the date at noon UTC to prevent date shifting
+    const shiftDate = new Date(`${dateStr}T12:00:00.000Z`);
+    const startTime = this.createShiftDateTime(dateStr, dto.startTime);
+    const endTime = this.createShiftDateTime(dateStr, dto.endTime);
 
     return this.shiftsService.create({
       companyId: req.user.companyId,
@@ -94,9 +83,9 @@ export class ShiftsController {
       throw new BadRequestException('Date is required');
     }
 
-    const shiftDate = new Date(`${dateStr}T12:00:00`);
-    const startTime = this.parseDateTime(dateStr, dto.startTime);
-    const endTime = this.parseDateTime(dateStr, dto.endTime);
+    const shiftDate = new Date(`${dateStr}T12:00:00.000Z`);
+    const startTime = this.createShiftDateTime(dateStr, dto.startTime);
+    const endTime = this.createShiftDateTime(dateStr, dto.endTime);
 
     return this.shiftsService.createOpenShift({
       companyId: req.user.companyId,
@@ -223,7 +212,7 @@ export class ShiftsController {
       {
         userId: dto.userId,
         jobId: dto.jobId,
-        shiftDate: dto.shiftDate ? new Date(`${dto.shiftDate}T12:00:00`) : undefined,
+        shiftDate: dto.shiftDate ? new Date(`${dto.shiftDate}T12:00:00.000Z`) : undefined,
         startTime: dto.startTime ? new Date(dto.startTime) : undefined,
         endTime: dto.endTime ? new Date(dto.endTime) : undefined,
         status: dto.status,
