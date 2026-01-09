@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MessagesService } from './messages.service';
@@ -79,5 +79,11 @@ export class MessagesController {
   @ApiOperation({ summary: 'Mark all messages as read' })
   markAllAsRead(@Request() req) {
     return this.messagesService.markAllAsRead(req.user.companyId, req.user.id);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete a message' })
+  delete(@Param('id') id: string, @Request() req) {
+    return this.messagesService.delete(id, req.user.id, req.user.companyId);
   }
 }
