@@ -210,53 +210,56 @@ export class ShiftsService {
     return shift;
   }
 
-  async findByUser(userId: string, filters?: {
-    startDate?: Date;
-    endDate?: Date;
-    status?: ShiftStatus;
-  }) {
-    const where: any = { userId };
+async findByUser(userId: string, filters?: {
+  startDate?: Date;
+  endDate?: Date;
+  status?: ShiftStatus;
+}) {
+  const where: any = { 
+    userId: userId,
+    isOpen: false,  // Explicitly exclude open shifts
+  };
 
-    if (filters?.status) where.status = filters.status;
+  if (filters?.status) where.status = filters.status;
 
-    if (filters?.startDate || filters?.endDate) {
-      where.shiftDate = {};
-      if (filters.startDate) where.shiftDate.gte = filters.startDate;
-      if (filters.endDate) where.shiftDate.lte = filters.endDate;
-    }
-
-    return this.prisma.shift.findMany({
-      where,
-      include: {
-        job: true,
-      },
-      orderBy: [
-        { shiftDate: 'asc' },
-        { startTime: 'asc' },
-      ],
-    });
+  if (filters?.startDate || filters?.endDate) {
+    where.shiftDate = {};
+    if (filters.startDate) where.shiftDate.gte = filters.startDate;
+    if (filters.endDate) where.shiftDate.lte = filters.endDate;
   }
 
-  async findOpenShifts(companyId: string) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  return this.prisma.shift.findMany({
+    where,
+    include: {
+      job: true,
+    },
+    orderBy: [
+      { shiftDate: 'asc' },
+      { startTime: 'asc' },
+    ],
+  });
+}
 
-    return this.prisma.shift.findMany({
-      where: {
-        companyId,
-        isOpen: true,
-        status: 'OPEN',
-        shiftDate: { gte: today },
-      },
-      include: {
-        job: true,
-      },
-      orderBy: [
-        { shiftDate: 'asc' },
-        { startTime: 'asc' },
-      ],
-    });
-  }
+async findOpenShifts(companyId: string) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return this.prisma.shift.findMany({
+    where: {
+      companyId,
+      isOpen: true,
+      userId: null,  // Explicitly require no user assigned
+      shiftDate: { gte: today },
+    },
+    include: {
+      job: true,
+    },
+    orderBy: [
+      { shiftDate: 'asc' },
+      { startTime: 'asc' },
+    ],
+  });
+}
 
   async claimShift(shiftId: string, userId: string, companyId: string) {
     const shift = await this.prisma.shift.findUnique({
