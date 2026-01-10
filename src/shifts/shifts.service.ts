@@ -217,7 +217,8 @@ async findByUser(userId: string, filters?: {
 }) {
   const where: any = { 
     userId: userId,
-    isOpen: false,  // Explicitly exclude open shifts
+    isOpen: false,
+    status: { notIn: ['CANCELLED'] },  // ADD THIS LINE
   };
 
   if (filters?.status) where.status = filters.status;
