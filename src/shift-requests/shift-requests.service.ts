@@ -443,14 +443,12 @@ export class ShiftRequestsService {
       },
     });
 
-    // If DROP request, cancel the shift
-    if (request.requestType === 'DROP') {
-      await this.prisma.shift.update({
-        where: { id: request.shiftId },
-        data: { status: 'CANCELLED' },
-      });
-    }
-
+    // If DROP request, delete the shift
+if (request.requestType === 'DROP') {
+  await this.prisma.shift.delete({
+    where: { id: request.shiftId },
+  });
+}
     // If SWAP request, swap the users on shifts
     if (request.requestType === 'SWAP' && request.swapTargetId && request.swapShiftId) {
       await this.prisma.$transaction([
