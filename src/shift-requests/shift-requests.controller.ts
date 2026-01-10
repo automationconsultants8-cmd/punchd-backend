@@ -9,20 +9,25 @@ import { FeatureGuard } from '../features/feature.guard';
 @ApiTags('Shift Requests')
 @Controller('shift-requests')
 @UseGuards(JwtAuthGuard, FeatureGuard)
-@RequiresFeature('SHIFT_REQUESTS') 
+@RequiresFeature('SHIFT_REQUESTS')
 @ApiBearerAuth()
 export class ShiftRequestsController {
   constructor(private readonly shiftRequestsService: ShiftRequestsService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create a shift request (drop or swap)' })
-  create(@Request() req, @Body() dto: {
-    shiftId: string;
-    requestType: ShiftRequestType;
-    reason: string;
-    swapTargetId?: string;
-    swapShiftId?: string;
-  }) {
+  @ApiOperation({ summary: 'Create a shift request (drop, swap, or offer)' })
+  create(
+    @Request() req,
+    @Body()
+    dto: {
+      shiftId: string;
+      requestType: ShiftRequestType;
+      reason: string;
+      swapTargetId?: string;
+      swapShiftId?: string;
+      offerToUserIds?: string[];
+    },
+  ) {
     return this.shiftRequestsService.create({
       companyId: req.user.companyId,
       requesterId: req.user.id,
@@ -31,6 +36,7 @@ export class ShiftRequestsController {
       reason: dto.reason,
       swapTargetId: dto.swapTargetId,
       swapShiftId: dto.swapShiftId,
+      offerToUserIds: dto.offerToUserIds,
     });
   }
 
@@ -62,9 +68,15 @@ export class ShiftRequestsController {
   }
 
   @Get('my-requests')
-  @ApiOperation({ summary: 'Get current user\'s shift requests' })
+  @ApiOperation({ summary: "Get current user's shift requests" })
   findMyRequests(@Request() req) {
     return this.shiftRequestsService.findByUser(req.user.id);
+  }
+
+  @Get('my-offers')
+  @ApiOperation({ summary: 'Get shift offers made to current user' })
+  findMyOffers(@Request() req) {
+    return this.shiftRequestsService.findOffersForUser(req.user.id);
   }
 
   @Get(':id')
@@ -97,5 +109,17 @@ export class ShiftRequestsController {
   @ApiOperation({ summary: 'Cancel own shift request' })
   cancel(@Param('id') id: string, @Request() req) {
     return this.shiftRequestsService.cancel(id, req.user.id);
+  }
+
+  @Post('offers/:offerId/accept')
+  @ApiOperation({ summary: 'Accept a shift offer' })
+  acceptOffer(@Param('offerId') offerId: string, @Request() req) {
+    return this.shiftRequestsService.acceptOffer(offerId, req.user.id);
+  }
+
+  @Post('offers/:offerId/decline')
+  @ApiOperation({ summary: 'Decline a shift offer' })
+  declineOffer(@Param('offerId') offerId: string, @Request() req) {
+    return this.shiftRequestsService.declineOffer(offerId, req.user.id);
   }
 }
