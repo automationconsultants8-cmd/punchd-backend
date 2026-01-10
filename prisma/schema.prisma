@@ -95,6 +95,7 @@ model User {
   shiftRequestsCreated    ShiftRequest[] @relation("ShiftRequestRequester")
   shiftRequestsAsTarget   ShiftRequest[] @relation("ShiftRequestSwapTarget")
   shiftRequestsReviewed   ShiftRequest[] @relation("ShiftRequestReviewer")
+  shiftOffersReceived     ShiftOffer[]   @relation("ShiftOffersReceived")
   
   timeOffRequestsCreated  TimeOffRequest[] @relation("TimeOffRequester")
   timeOffRequestsReviewed TimeOffRequest[] @relation("TimeOffReviewer")
@@ -402,6 +403,7 @@ model Shift {
 enum ShiftRequestType {
   DROP
   SWAP
+  OFFER
 }
 
 enum ShiftRequestStatus {
@@ -409,6 +411,13 @@ enum ShiftRequestStatus {
   APPROVED
   DECLINED
   CANCELLED
+}
+
+enum ShiftOfferStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
 }
 
 model ShiftRequest {
@@ -435,11 +444,28 @@ model ShiftRequest {
   requester       User               @relation("ShiftRequestRequester", fields: [requesterId], references: [id], onDelete: Cascade)
   swapTarget      User?              @relation("ShiftRequestSwapTarget", fields: [swapTargetId], references: [id], onDelete: SetNull)
   reviewedBy      User?              @relation("ShiftRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  shiftOffers     ShiftOffer[]
 
   @@index([companyId, status])
   @@index([requesterId, status])
   @@index([shiftId])
   @@map("shift_requests")
+}
+
+model ShiftOffer {
+  id              String           @id @default(uuid())
+  shiftRequestId  String
+  offeredToId     String
+  status          ShiftOfferStatus @default(PENDING)
+  respondedAt     DateTime?
+  createdAt       DateTime         @default(now())
+
+  shiftRequest    ShiftRequest     @relation(fields: [shiftRequestId], references: [id], onDelete: Cascade)
+  offeredTo       User             @relation("ShiftOffersReceived", fields: [offeredToId], references: [id], onDelete: Cascade)
+
+  @@index([shiftRequestId])
+  @@index([offeredToId, status])
+  @@map("shift_offers")
 }
 
 enum TimeOffType {
