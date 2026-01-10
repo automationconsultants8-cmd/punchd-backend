@@ -241,16 +241,15 @@ async findByUser(userId: string, filters?: {
 }
 
 async findOpenShifts(companyId: string) {
-  // Use UTC midnight to match how shiftDate is stored
   const now = new Date();
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
 
   return this.prisma.shift.findMany({
     where: {
       companyId,
       isOpen: true,
       userId: null,
-      shiftDate: { gte: today },
+      // Only show shifts that haven't ended yet
+      endTime: { gte: now },
     },
     include: {
       job: true,
