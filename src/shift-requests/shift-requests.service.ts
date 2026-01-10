@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { ShiftRequestType, ShiftRequestStatus } from '@prisma/client';
+import { ShiftRequestType, ShiftRequestStatus, ShiftOfferStatus } from '@prisma/client';
 
 @Injectable()
 export class ShiftRequestsService {
@@ -20,6 +20,7 @@ export class ShiftRequestsService {
     reason: string;
     swapTargetId?: string;
     swapShiftId?: string;
+    offerToUserIds?: string[];
   }) {
     // Verify shift exists and belongs to requester
     const shift = await this.prisma.shift.findUnique({
@@ -47,6 +48,11 @@ export class ShiftRequestsService {
       throw new BadRequestException('There is already a pending request for this shift');
     }
 
+    // Validate OFFER requests have recipients
+    if (data.requestType === 'OFFER' && (!data.offerToUserIds || data.offerToUserIds.length === 0)) {
+      throw new BadRequestException('Please select at least one coworker to offer this shift to');
+    }
+
     const request = await this.prisma.shiftRequest.create({
       data: {
         companyId: data.companyId,
@@ -67,6 +73,37 @@ export class ShiftRequestsService {
       },
     });
 
+    // If OFFER type, create offer records for each selected coworker
+    if (data.requestType === 'OFFER' && data.offerToUserIds && data.offerToUserIds.length > 0) {
+      await this.prisma.shiftOffer.createMany({
+        data: data.offerToUserIds.map(userId => ({
+          shiftRequestId: request.id,
+          offeredToId: userId,
+          status: 'PENDING',
+        })),
+      });
+
+      // Get requester name for notifications
+      const requester = await this.prisma.user.findUnique({
+        where: { id: data.requesterId },
+        select: { name: true },
+      });
+
+      // Notify each coworker
+      const shiftDate = new Date(shift.shiftDate).toLocaleDateString();
+      const jobName = shift.job?.name || 'a job site';
+      
+      await this.notificationsService.sendToUsers(data.offerToUserIds, {
+        title: 'Shift Offered to You',
+        body: `${requester?.name || 'A coworker'} offered you their ${jobName} shift on ${shiftDate}`,
+        data: { 
+          type: 'shift_offer', 
+          screen: 'ShiftOffers',
+          shiftRequestId: request.id,
+        },
+      });
+    }
+
     await this.auditService.log({
       companyId: data.companyId,
       userId: data.requesterId,
@@ -76,19 +113,22 @@ export class ShiftRequestsService {
       details: {
         requestType: data.requestType,
         shiftId: data.shiftId,
+        offerToUserIds: data.offerToUserIds,
       },
     });
 
-    // Notify admins of new request
-    const requester = await this.prisma.user.findUnique({
-      where: { id: data.requesterId },
-      select: { name: true },
-    });
-    await this.notificationsService.notifyAdminsOfRequest(
-      data.companyId,
-      'shift',
-      requester?.name || 'A worker',
-    );
+    // Notify admins of DROP requests (OFFER requests don't need admin approval)
+    if (data.requestType === 'DROP') {
+      const requester = await this.prisma.user.findUnique({
+        where: { id: data.requesterId },
+        select: { name: true },
+      });
+      await this.notificationsService.notifyAdminsOfRequest(
+        data.companyId,
+        'shift',
+        requester?.name || 'A worker',
+      );
+    }
 
     return request;
   }
@@ -113,6 +153,13 @@ export class ShiftRequestsService {
         requester: true,
         swapTarget: true,
         reviewedBy: true,
+        shiftOffers: {
+          include: {
+            offeredTo: {
+              select: { id: true, name: true },
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -132,6 +179,13 @@ export class ShiftRequestsService {
         requester: true,
         swapTarget: true,
         reviewedBy: true,
+        shiftOffers: {
+          include: {
+            offeredTo: {
+              select: { id: true, name: true },
+            },
+          },
+        },
       },
     });
 
@@ -150,9 +204,219 @@ export class ShiftRequestsService {
           include: { job: true },
         },
         reviewedBy: true,
+        shiftOffers: {
+          include: {
+            offeredTo: {
+              select: { id: true, name: true },
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  // Get offers that have been made to the current user
+  async findOffersForUser(userId: string) {
+    return this.prisma.shiftOffer.findMany({
+      where: {
+        offeredToId: userId,
+        status: 'PENDING',
+      },
+      include: {
+        shiftRequest: {
+          include: {
+            shift: {
+              include: { job: true },
+            },
+            requester: {
+              select: { id: true, name: true },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  // Accept a shift offer
+  async acceptOffer(offerId: string, userId: string) {
+    const offer = await this.prisma.shiftOffer.findUnique({
+      where: { id: offerId },
+      include: {
+        shiftRequest: {
+          include: {
+            shift: {
+              include: { job: true },
+            },
+            requester: true,
+          },
+        },
+      },
+    });
+
+    if (!offer) {
+      throw new NotFoundException('Offer not found');
+    }
+
+    if (offer.offeredToId !== userId) {
+      throw new ForbiddenException('This offer was not made to you');
+    }
+
+    if (offer.status !== 'PENDING') {
+      throw new BadRequestException('This offer is no longer available');
+    }
+
+    if (offer.shiftRequest.status !== 'PENDING') {
+      throw new BadRequestException('This shift is no longer available');
+    }
+
+    // Check for conflicts
+    const shift = offer.shiftRequest.shift;
+    const conflictingShift = await this.prisma.shift.findFirst({
+      where: {
+        userId,
+        shiftDate: shift.shiftDate,
+        status: { notIn: ['CANCELLED'] },
+        id: { not: shift.id },
+        OR: [
+          {
+            startTime: { lte: shift.endTime },
+            endTime: { gte: shift.startTime },
+          },
+        ],
+      },
+    });
+
+    if (conflictingShift) {
+      throw new BadRequestException('You already have a shift during this time');
+    }
+
+    // Transaction: accept offer, decline others, transfer shift, update request
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Accept this offer
+      await tx.shiftOffer.update({
+        where: { id: offerId },
+        data: { status: 'ACCEPTED', respondedAt: new Date() },
+      });
+
+      // Decline all other offers for this request
+      await tx.shiftOffer.updateMany({
+        where: {
+          shiftRequestId: offer.shiftRequestId,
+          id: { not: offerId },
+          status: 'PENDING',
+        },
+        data: { status: 'DECLINED', respondedAt: new Date() },
+      });
+
+      // Transfer the shift to the accepting user
+      await tx.shift.update({
+        where: { id: shift.id },
+        data: { userId: userId },
+      });
+
+      // Mark the request as approved
+      const updatedRequest = await tx.shiftRequest.update({
+        where: { id: offer.shiftRequestId },
+        data: {
+          status: 'APPROVED',
+          reviewedAt: new Date(),
+        },
+        include: {
+          shift: { include: { job: true } },
+          requester: true,
+        },
+      });
+
+      return updatedRequest;
+    });
+
+    // Notify the original owner that their shift was accepted
+    const acceptor = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true },
+    });
+    const shiftDate = new Date(shift.shiftDate).toLocaleDateString();
+    const jobName = shift.job?.name || 'a job site';
+
+    await this.notificationsService.sendToUsers([offer.shiftRequest.requesterId], {
+      title: 'Shift Offer Accepted',
+      body: `${acceptor?.name || 'A coworker'} accepted your ${jobName} shift on ${shiftDate}`,
+      data: { type: 'shift_offer_accepted', screen: 'Schedule' },
+    });
+
+    await this.auditService.log({
+      companyId: offer.shiftRequest.companyId,
+      userId,
+      action: 'SHIFT_REQUEST_APPROVED',
+      targetType: 'ShiftRequest',
+      targetId: offer.shiftRequestId,
+      details: {
+        acceptedByOffer: true,
+        offerId,
+      },
+    });
+
+    return result;
+  }
+
+  // Decline a shift offer
+  async declineOffer(offerId: string, userId: string) {
+    const offer = await this.prisma.shiftOffer.findUnique({
+      where: { id: offerId },
+      include: {
+        shiftRequest: {
+          include: {
+            requester: true,
+            shiftOffers: true,
+          },
+        },
+      },
+    });
+
+    if (!offer) {
+      throw new NotFoundException('Offer not found');
+    }
+
+    if (offer.offeredToId !== userId) {
+      throw new ForbiddenException('This offer was not made to you');
+    }
+
+    if (offer.status !== 'PENDING') {
+      throw new BadRequestException('This offer has already been responded to');
+    }
+
+    // Decline this offer
+    await this.prisma.shiftOffer.update({
+      where: { id: offerId },
+      data: { status: 'DECLINED', respondedAt: new Date() },
+    });
+
+    // Check if all offers have been declined
+    const pendingOffers = await this.prisma.shiftOffer.count({
+      where: {
+        shiftRequestId: offer.shiftRequestId,
+        status: 'PENDING',
+      },
+    });
+
+    // If no pending offers left, notify the requester
+    if (pendingOffers === 0) {
+      await this.notificationsService.sendToUsers([offer.shiftRequest.requesterId], {
+        title: 'Shift Offer Update',
+        body: 'All coworkers have declined your shift offer. You may want to submit a drop request instead.',
+        data: { type: 'shift_offer_all_declined', screen: 'ShiftRequests' },
+      });
+
+      // Mark request as declined since no one accepted
+      await this.prisma.shiftRequest.update({
+        where: { id: offer.shiftRequestId },
+        data: { status: 'DECLINED' },
+      });
+    }
+
+    return { success: true, remainingOffers: pendingOffers };
   }
 
   async approve(id: string, reviewerId: string, reviewerNotes?: string) {
@@ -279,6 +543,17 @@ export class ShiftRequestsService {
 
     if (request.status !== 'PENDING') {
       throw new BadRequestException('Only pending requests can be cancelled');
+    }
+
+    // If OFFER type, also cancel all pending offers
+    if (request.requestType === 'OFFER') {
+      await this.prisma.shiftOffer.updateMany({
+        where: {
+          shiftRequestId: id,
+          status: 'PENDING',
+        },
+        data: { status: 'EXPIRED' },
+      });
     }
 
     const updated = await this.prisma.shiftRequest.update({
