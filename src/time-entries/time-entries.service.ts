@@ -63,48 +63,91 @@ export class TimeEntriesService {
       jobId = dto.jobId;
     }
 
-    // Skip S3 upload - photos verified locally but not stored
-    const photoUrl = 'verified-locally';
-
-    const timeEntry = await this.prisma.timeEntry.create({
-      data: {
-        companyId,
-        userId,
-        jobId,
-        clockInTime: new Date(),
-        clockInLocation: `${dto.latitude},${dto.longitude}`,
-        clockInPhotoUrl: photoUrl,
-        isFlagged: flagReasons.length > 0,
-        flagReason: flagReasons.length > 0 ? flagReasons.join(', ') : null,
-        approvalStatus: flagReasons.length > 0 ? 'PENDING' : 'APPROVED',
-      },
-      include: {
-        job: true,
-        user: { select: { id: true, name: true, phone: true } },
-      },
+   // Face verification
+if (dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
+  // Check if user has a reference photo
+  if (!user?.referencePhotoUrl) {
+    // First clock-in - store this photo as reference
+    console.log(`First clock-in for user ${userId}, storing reference photo`);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { referencePhotoUrl: dto.photoUrl },
     });
+    // No comparison needed for first clock-in
+  } else {
+    // Compare against stored reference
+    try {
+      const confidence = await this.awsService.compareFaces(
+        user.referencePhotoUrl,
+        dto.photoUrl,
+      );
 
-    // Face verification
-    if (user?.referencePhotoUrl && dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
-      try {
-        const confidence = await this.awsService.compareFaces(
-          user.referencePhotoUrl,
-          dto.photoUrl,
-        );
+      const matched = confidence >= 80;
 
-        const matched = confidence >= 80;
+      await this.prisma.faceVerificationLog.create({
+        data: {
+          companyId,
+          userId,
+          timeEntryId: timeEntry.id,
+          submittedPhotoUrl: 'verified-locally',
+          confidenceScore: confidence,
+          matched,
+          rekognitionResponse: { confidence, matched },
+        },
+      });
 
-        await this.prisma.faceVerificationLog.create({
-          data: {
-            companyId,
-            userId,
-            timeEntryId: timeEntry.id,
-            submittedPhotoUrl: 'verified-locally',
-            confidenceScore: confidence,
-            matched,
-            rekognitionResponse: { confidence, matched },
-          },
+      if (!matched) {
+        await this.prisma.timeEntry.delete({
+          where: { id: timeEntry.id },
         });
+
+        const admins = await this.prisma.user.findMany({
+          where: {
+            companyId,
+            role: { in: ['ADMIN', 'OWNER'] },
+            email: { not: null },
+          },
+          select: { email: true },
+        });
+
+        for (const admin of admins) {
+          if (admin.email) {
+            try {
+              await this.emailService.sendBuddyPunchAlert(
+                admin.email,
+                user.name,
+                user.phone,
+                jobName,
+                confidence,
+                'photo-not-stored',
+              );
+            } catch (emailErr) {
+              console.error('Failed to send buddy punch alert:', emailErr);
+            }
+          }
+        }
+
+        throw new ForbiddenException(
+          `Face verification failed. Confidence: ${confidence.toFixed(1)}%. Please try again or contact your supervisor.`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof ForbiddenException) {
+        throw err;
+      }
+
+      console.error('Face verification error:', err);
+      await this.prisma.timeEntry.update({
+        where: { id: timeEntry.id },
+        data: {
+          isFlagged: true,
+          flagReason: 'FACE_VERIFICATION_ERROR',
+          approvalStatus: 'PENDING',
+        },
+      });
+    }
+  }
+}
 
         if (!matched) {
           await this.prisma.timeEntry.delete({
