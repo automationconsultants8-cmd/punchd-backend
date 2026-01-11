@@ -148,6 +148,11 @@ export class CertifiedPayrollService {
       workerData[userId].regularHours += (entry.regularMinutes || 0) / 60;
       workerData[userId].overtimeHours += ((entry.overtimeMinutes || 0) + (entry.doubleTimeMinutes || 0)) / 60;
       workerData[userId].grossPay += entry.laborCost ? Number(entry.laborCost) : 0;
+      
+      // Update hourly rate if this entry has one and we don't have one yet
+      if (entry.hourlyRate && workerData[userId].hourlyRate === 0) {
+        workerData[userId].hourlyRate = Number(entry.hourlyRate);
+      }
     }
 
     for (const userId in workerData) {
