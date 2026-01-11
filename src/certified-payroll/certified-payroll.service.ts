@@ -42,6 +42,27 @@ export class CertifiedPayrollService {
     });
   }
 
+  private parseDate(dateInput: Date | string): Date {
+    if (dateInput instanceof Date) {
+      return dateInput;
+    }
+    
+    if (typeof dateInput === 'string') {
+      // Handle YYYY-MM-DD format
+      const parts = dateInput.split('-');
+      if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1; // Months are 0-indexed
+        const day = parseInt(parts[2], 10);
+        return new Date(year, month, day, 12, 0, 0);
+      }
+      // Try standard parsing as fallback
+      return new Date(dateInput);
+    }
+    
+    return new Date(dateInput);
+  }
+
   async generatePayrollData(companyId: string, jobId: string, weekEndingDateInput: Date | string): Promise<PayrollPreviewData> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, companyId, isPrevailingWage: true },
@@ -52,13 +73,7 @@ export class CertifiedPayrollService {
     }
 
     // Parse the date properly
-    let weekEndingDate: Date;
-    if (typeof weekEndingDateInput === 'string') {
-      // Handle string date input - add time to avoid timezone issues
-      weekEndingDate = new Date(weekEndingDateInput + 'T12:00:00Z');
-    } else {
-      weekEndingDate = new Date(weekEndingDateInput);
-    }
+    const weekEndingDate = this.parseDate(weekEndingDateInput);
 
     if (isNaN(weekEndingDate.getTime())) {
       throw new BadRequestException('Invalid week ending date');
@@ -156,12 +171,7 @@ export class CertifiedPayrollService {
 
   async createOrUpdatePayroll(companyId: string, jobId: string, weekEndingDateInput: Date | string, userId: string) {
     // Parse the date properly
-    let weekEndingDate: Date;
-    if (typeof weekEndingDateInput === 'string') {
-      weekEndingDate = new Date(weekEndingDateInput + 'T12:00:00Z');
-    } else {
-      weekEndingDate = new Date(weekEndingDateInput);
-    }
+    const weekEndingDate = this.parseDate(weekEndingDateInput);
 
     if (isNaN(weekEndingDate.getTime())) {
       throw new BadRequestException('Invalid week ending date');
