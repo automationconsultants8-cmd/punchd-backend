@@ -42,13 +42,26 @@ export class CertifiedPayrollService {
     });
   }
 
-  async generatePayrollData(companyId: string, jobId: string, weekEndingDate: Date): Promise<PayrollPreviewData> {
+  async generatePayrollData(companyId: string, jobId: string, weekEndingDateInput: Date | string): Promise<PayrollPreviewData> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, companyId, isPrevailingWage: true },
     });
 
     if (!job) {
       throw new NotFoundException('Prevailing wage job not found');
+    }
+
+    // Parse the date properly
+    let weekEndingDate: Date;
+    if (typeof weekEndingDateInput === 'string') {
+      // Handle string date input - add time to avoid timezone issues
+      weekEndingDate = new Date(weekEndingDateInput + 'T12:00:00Z');
+    } else {
+      weekEndingDate = new Date(weekEndingDateInput);
+    }
+
+    if (isNaN(weekEndingDate.getTime())) {
+      throw new BadRequestException('Invalid week ending date');
     }
 
     const weekEnding = new Date(weekEndingDate);
@@ -141,7 +154,19 @@ export class CertifiedPayrollService {
     };
   }
 
-  async createOrUpdatePayroll(companyId: string, jobId: string, weekEndingDate: Date, userId: string) {
+  async createOrUpdatePayroll(companyId: string, jobId: string, weekEndingDateInput: Date | string, userId: string) {
+    // Parse the date properly
+    let weekEndingDate: Date;
+    if (typeof weekEndingDateInput === 'string') {
+      weekEndingDate = new Date(weekEndingDateInput + 'T12:00:00Z');
+    } else {
+      weekEndingDate = new Date(weekEndingDateInput);
+    }
+
+    if (isNaN(weekEndingDate.getTime())) {
+      throw new BadRequestException('Invalid week ending date');
+    }
+
     const payrollData = await this.generatePayrollData(companyId, jobId, weekEndingDate);
 
     const existingPayrolls = await this.prisma.certifiedPayroll.count({
