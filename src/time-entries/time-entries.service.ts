@@ -4,6 +4,7 @@ import { JobsService } from '../jobs/jobs.service';
 import { AwsService } from '../aws/aws.service';
 import { EmailService } from '../email/email.service';
 import { AuditService } from '../audit/audit.service';
+import { BreakComplianceService } from '../break-compliance/break-compliance.service';
 import { ClockInDto, ClockOutDto } from './dto';
 import { CreateManualEntryDto } from './dto/create-manual-entry.dto';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -18,6 +19,7 @@ export class TimeEntriesService {
     private awsService: AwsService,
     private emailService: EmailService,
     private auditService: AuditService,
+    private breakComplianceService: BreakComplianceService,
   ) {}
 
   async clockIn(userId: string, companyId: string, dto: ClockInDto) {
@@ -204,7 +206,7 @@ export class TimeEntriesService {
       workMinutes,
     );
 
-    return this.prisma.timeEntry.update({
+    const updatedEntry = await this.prisma.timeEntry.update({
       where: { id: activeEntry.id },
       data: {
         clockOutTime,
@@ -222,6 +224,31 @@ export class TimeEntriesService {
         user: { select: { id: true, name: true, phone: true } },
       },
     });
+
+    // Check break compliance on clock out
+    try {
+      const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
+      const complianceResult = this.breakComplianceService.checkCompliance(
+        workMinutes,
+        activeEntry.breakMinutes || 0,
+        0, // rest break count
+        breakSettings,
+      );
+
+      if (!complianceResult.isCompliant) {
+        await this.breakComplianceService.recordViolations(
+          companyId,
+          userId,
+          activeEntry.id,
+          complianceResult.violations,
+          overtimeCalc.hourlyRate,
+        );
+      }
+    } catch (err) {
+      console.error('Break compliance check error:', err);
+    }
+
+    return updatedEntry;
   }
 
   private async calculateOvertimeForEntry(
@@ -607,6 +634,7 @@ export class TimeEntriesService {
       }
     }
 
+    // Fix timezone - store as UTC
     const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00.000Z`);
     const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00.000Z`);
 
@@ -649,6 +677,29 @@ export class TimeEntriesService {
         job: true,
       },
     });
+
+    // Check break compliance for manual entry
+    try {
+      const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
+      const complianceResult = this.breakComplianceService.checkCompliance(
+        workMinutes,
+        dto.breakMinutes || 0,
+        0, // rest break count - manual entries don't track this
+        breakSettings,
+      );
+
+      if (!complianceResult.isCompliant) {
+        await this.breakComplianceService.recordViolations(
+          companyId,
+          dto.userId,
+          entry.id,
+          complianceResult.violations,
+          overtimeCalc.hourlyRate,
+        );
+      }
+    } catch (err) {
+      console.error('Break compliance check error:', err);
+    }
 
     await this.auditService.log({
       companyId,
