@@ -492,3 +492,4 @@ export class UsersService {
 
     return { rate: null, isPrevailingWage: false, source: 'none' };
   }
+}
