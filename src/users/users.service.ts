@@ -438,6 +438,7 @@ export class UsersService {
       return { rate: null, isPrevailingWage: false, source: 'none' };
     }
 
+    // 1. Check job-specific rate first
     if (jobId) {
       const jobRate = await this.prisma.workerJobRate.findFirst({
         where: { companyId, userId, jobId },
@@ -451,6 +452,7 @@ export class UsersService {
         };
       }
 
+      // 2. Check job default rate
       const job = await this.prisma.job.findFirst({
         where: { id: jobId, companyId },
         select: { defaultHourlyRate: true, isPrevailingWage: true },
@@ -465,6 +467,7 @@ export class UsersService {
       }
     }
 
+    // 3. Check worker default rate
     if (user.hourlyRate) {
       return {
         rate: Number(user.hourlyRate),
@@ -473,6 +476,19 @@ export class UsersService {
       };
     }
 
+    // 4. Check company default rate (NEW!)
+    const company = await this.prisma.company.findFirst({
+      where: { id: companyId },
+      select: { defaultHourlyRate: true },
+    });
+
+    if (company?.defaultHourlyRate) {
+      return {
+        rate: Number(company.defaultHourlyRate),
+        isPrevailingWage: false,
+        source: 'company_default',
+      };
+    }
+
     return { rate: null, isPrevailingWage: false, source: 'none' };
   }
-}
