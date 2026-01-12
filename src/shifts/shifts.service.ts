@@ -110,6 +110,7 @@ export class ShiftsService {
     endTime: string | Date;
     notes?: string;
     isOpen?: boolean;
+    repeatWeeks?: number; // NEW: Number of weeks to repeat (0 = no repeat)
   }) {
     // Use date or shiftDate (frontend might send either)
     const dateValue = data.date || data.shiftDate;
@@ -118,46 +119,76 @@ export class ShiftsService {
     }
 
     const parsed = this.parseShiftDates(dateValue, data.startTime, data.endTime);
+    const repeatWeeks = data.repeatWeeks || 0;
+    const createdShifts = [];
 
-    const shift = await this.prisma.shift.create({
-      data: {
-        companyId: data.companyId,
-        userId: data.userId || null,
-        jobId: data.jobId,
-        shiftDate: parsed.shiftDate,
-        startTime: parsed.startTime,
-        endTime: parsed.endTime,
-        notes: data.notes || '',
-        isOpen: data.isOpen || !data.userId,
-        status: data.isOpen || !data.userId ? 'OPEN' : 'SCHEDULED',
-      },
-      include: {
-        user: true,
-        job: true,
-      },
-    });
+    // Create shifts for this week + repeat weeks
+    for (let week = 0; week <= repeatWeeks; week++) {
+      const shiftDate = new Date(parsed.shiftDate);
+      shiftDate.setDate(shiftDate.getDate() + (week * 7));
 
+      const startTime = new Date(parsed.startTime);
+      startTime.setDate(startTime.getDate() + (week * 7));
+
+      const endTime = new Date(parsed.endTime);
+      endTime.setDate(endTime.getDate() + (week * 7));
+
+      const shift = await this.prisma.shift.create({
+        data: {
+          companyId: data.companyId,
+          userId: data.userId || null,
+          jobId: data.jobId,
+          shiftDate: shiftDate,
+          startTime: startTime,
+          endTime: endTime,
+          notes: data.notes || '',
+          isOpen: data.isOpen || !data.userId,
+          status: data.isOpen || !data.userId ? 'OPEN' : 'SCHEDULED',
+        },
+        include: {
+          user: true,
+          job: true,
+        },
+      });
+
+      createdShifts.push(shift);
+    }
+
+    // Log audit for first shift (represents the series)
     await this.auditService.log({
       companyId: data.companyId,
       userId: data.userId,
       action: 'SHIFT_CREATED',
       targetType: 'Shift',
-      targetId: shift.id,
+      targetId: createdShifts[0].id,
       details: {
         jobId: data.jobId,
         shiftDate: parsed.shiftDate,
-        isOpen: shift.isOpen,
+        isOpen: createdShifts[0].isOpen,
+        repeatWeeks: repeatWeeks,
+        totalShiftsCreated: createdShifts.length,
       },
     });
 
-    if (data.userId && !shift.isOpen) {
-      const jobName = shift.job?.name || 'a job site';
+    // Notify worker only once (for the first shift)
+    if (data.userId && !createdShifts[0].isOpen) {
+      const jobName = createdShifts[0].job?.name || 'a job site';
       const shiftDateStr = parsed.shiftDate.toLocaleDateString();
       const startTimeStr = parsed.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      await this.notificationsService.notifyNewShift(data.userId, jobName, shiftDateStr, startTimeStr);
+      
+      if (repeatWeeks > 0) {
+        await this.notificationsService.sendToUser(data.userId, {
+          title: 'New Recurring Shift',
+          body: `You've been scheduled at ${jobName} starting ${shiftDateStr} for ${repeatWeeks + 1} weeks.`,
+          data: { type: 'schedule', screen: 'Schedule' },
+        });
+      } else {
+        await this.notificationsService.notifyNewShift(data.userId, jobName, shiftDateStr, startTimeStr);
+      }
     }
 
-    return shift;
+    // Return first shift for single creation, array for recurring
+    return repeatWeeks > 0 ? createdShifts : createdShifts[0];
   }
 
   async findAll(companyId: string, filters?: {
@@ -210,57 +241,57 @@ export class ShiftsService {
     return shift;
   }
 
-async findByUser(userId: string, filters?: {
-  startDate?: Date;
-  endDate?: Date;
-  status?: ShiftStatus;
-}) {
-  const where: any = { 
-    userId: userId,
-    isOpen: false,
-    status: { notIn: ['CANCELLED'] },  // ADD THIS LINE
-  };
+  async findByUser(userId: string, filters?: {
+    startDate?: Date;
+    endDate?: Date;
+    status?: ShiftStatus;
+  }) {
+    const where: any = { 
+      userId: userId,
+      isOpen: false,
+      status: { notIn: ['CANCELLED'] },
+    };
 
-  if (filters?.status) where.status = filters.status;
+    if (filters?.status) where.status = filters.status;
 
-  if (filters?.startDate || filters?.endDate) {
-    where.shiftDate = {};
-    if (filters.startDate) where.shiftDate.gte = filters.startDate;
-    if (filters.endDate) where.shiftDate.lte = filters.endDate;
+    if (filters?.startDate || filters?.endDate) {
+      where.shiftDate = {};
+      if (filters.startDate) where.shiftDate.gte = filters.startDate;
+      if (filters.endDate) where.shiftDate.lte = filters.endDate;
+    }
+
+    return this.prisma.shift.findMany({
+      where,
+      include: {
+        job: true,
+      },
+      orderBy: [
+        { shiftDate: 'asc' },
+        { startTime: 'asc' },
+      ],
+    });
   }
 
-  return this.prisma.shift.findMany({
-    where,
-    include: {
-      job: true,
-    },
-    orderBy: [
-      { shiftDate: 'asc' },
-      { startTime: 'asc' },
-    ],
-  });
-}
+  async findOpenShifts(companyId: string) {
+    const now = new Date();
 
-async findOpenShifts(companyId: string) {
-  const now = new Date();
-
-  return this.prisma.shift.findMany({
-    where: {
-      companyId,
-      isOpen: true,
-      userId: null,
-      // Only show shifts that haven't ended yet
-      endTime: { gte: now },
-    },
-    include: {
-      job: true,
-    },
-    orderBy: [
-      { shiftDate: 'asc' },
-      { startTime: 'asc' },
-    ],
-  });
-}
+    return this.prisma.shift.findMany({
+      where: {
+        companyId,
+        isOpen: true,
+        userId: null,
+        // Only show shifts that haven't ended yet
+        endTime: { gte: now },
+      },
+      include: {
+        job: true,
+      },
+      orderBy: [
+        { shiftDate: 'asc' },
+        { startTime: 'asc' },
+      ],
+    });
+  }
 
   async claimShift(shiftId: string, userId: string, companyId: string) {
     const shift = await this.prisma.shift.findUnique({
@@ -463,6 +494,65 @@ async findOpenShifts(companyId: string) {
     return { success: true };
   }
 
+  // NEW: Delete all future shifts for a worker
+  async deleteFutureShiftsForWorker(companyId: string, userId: string, deletedById: string) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Find all future shifts for this worker
+    const futureShifts = await this.prisma.shift.findMany({
+      where: {
+        companyId,
+        userId,
+        shiftDate: { gte: today },
+        status: { notIn: ['COMPLETED', 'CANCELLED'] },
+      },
+      include: { job: true },
+    });
+
+    if (futureShifts.length === 0) {
+      return { success: true, deletedCount: 0 };
+    }
+
+    // Delete all future shifts
+    const deleteResult = await this.prisma.shift.deleteMany({
+      where: {
+        companyId,
+        userId,
+        shiftDate: { gte: today },
+        status: { notIn: ['COMPLETED', 'CANCELLED'] },
+      },
+    });
+
+    // Log audit
+    await this.auditService.log({
+      companyId,
+      userId: deletedById,
+      action: 'SHIFT_DELETED',
+      targetType: 'Shift',
+      targetId: userId,
+      details: {
+        bulkDelete: true,
+        deletedCount: deleteResult.count,
+        reason: 'All future shifts deleted for worker',
+      },
+    });
+
+    // Notify the worker
+    await this.notificationsService.sendToUser(userId, {
+      title: 'Shifts Cancelled',
+      body: `${deleteResult.count} upcoming shift(s) have been cancelled.`,
+      data: { type: 'schedule', screen: 'Schedule' },
+    });
+
+    return { success: true, deletedCount: deleteResult.count };
+  }
+
+  // NEW: Delete all future shifts (useful when deactivating a worker)
+  async deleteAllFutureShiftsForDeactivatedWorker(companyId: string, userId: string, deletedById: string) {
+    return this.deleteFutureShiftsForWorker(companyId, userId, deletedById);
+  }
+
   async updateStatus(id: string, status: ShiftStatus, updatedById: string) {
     const shift = await this.findOne(id);
 
@@ -520,5 +610,86 @@ async findOpenShifts(companyId: string) {
     ]);
 
     return { scheduled, open, completed, cancelled };
+  }
+
+  // NEW: Copy last week's schedule to this week
+  async copyLastWeek(companyId: string, targetWeekStart: Date, createdById: string) {
+    // Calculate last week's date range
+    const lastWeekStart = new Date(targetWeekStart);
+    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    
+    const lastWeekEnd = new Date(lastWeekStart);
+    lastWeekEnd.setDate(lastWeekEnd.getDate() + 6);
+
+    // Get last week's shifts
+    const lastWeekShifts = await this.prisma.shift.findMany({
+      where: {
+        companyId,
+        shiftDate: {
+          gte: lastWeekStart,
+          lte: lastWeekEnd,
+        },
+        status: { notIn: ['CANCELLED'] },
+      },
+      include: { job: true, user: true },
+    });
+
+    if (lastWeekShifts.length === 0) {
+      return { success: true, copiedCount: 0, message: 'No shifts found in previous week' };
+    }
+
+    const createdShifts = [];
+
+    for (const shift of lastWeekShifts) {
+      // Calculate the new dates (add 7 days)
+      const newShiftDate = new Date(shift.shiftDate);
+      newShiftDate.setDate(newShiftDate.getDate() + 7);
+
+      const newStartTime = new Date(shift.startTime);
+      newStartTime.setDate(newStartTime.getDate() + 7);
+
+      const newEndTime = new Date(shift.endTime);
+      newEndTime.setDate(newEndTime.getDate() + 7);
+
+      const newShift = await this.prisma.shift.create({
+        data: {
+          companyId,
+          userId: shift.userId,
+          jobId: shift.jobId,
+          shiftDate: newShiftDate,
+          startTime: newStartTime,
+          endTime: newEndTime,
+          notes: shift.notes,
+          isOpen: shift.isOpen,
+          status: shift.isOpen ? 'OPEN' : 'SCHEDULED',
+        },
+        include: { user: true, job: true },
+      });
+
+      createdShifts.push(newShift);
+
+      // Notify worker if assigned
+      if (newShift.userId) {
+        const jobName = newShift.job?.name || 'a job site';
+        const shiftDateStr = newShiftDate.toLocaleDateString();
+        const startTimeStr = newStartTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        await this.notificationsService.notifyNewShift(newShift.userId, jobName, shiftDateStr, startTimeStr);
+      }
+    }
+
+    await this.auditService.log({
+      companyId,
+      userId: createdById,
+      action: 'SHIFT_CREATED',
+      targetType: 'Shift',
+      targetId: 'bulk',
+      details: {
+        action: 'copyLastWeek',
+        copiedCount: createdShifts.length,
+        targetWeekStart: targetWeekStart,
+      },
+    });
+
+    return { success: true, copiedCount: createdShifts.length, shifts: createdShifts };
   }
 }
