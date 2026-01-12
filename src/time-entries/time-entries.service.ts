@@ -634,10 +634,10 @@ export class TimeEntriesService {
       }
     }
 
-   // Store as local time
-const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00`);
-const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00`);
-
+// Store as Pacific time (UTC-8)
+const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00-08:00`);
+const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00-08:00`);
+    
     if (clockOutTime <= clockInTime) {
       throw new BadRequestException('Clock out time must be after clock in time');
     }
