@@ -120,8 +120,8 @@ export class ShiftsService {
 
     const parsed = this.parseShiftDates(dateValue, data.startTime, data.endTime);
     const repeatWeeks = data.repeatWeeks || 0;
-    const createdShifts = [];
-
+    const createdShifts: any[] = [];
+    
     // Create shifts for this week + repeat weeks
     for (let week = 0; week <= repeatWeeks; week++) {
       const shiftDate = new Date(parsed.shiftDate);
@@ -638,7 +638,7 @@ export class ShiftsService {
       return { success: true, copiedCount: 0, message: 'No shifts found in previous week' };
     }
 
-    const createdShifts = [];
+    const createdShifts: any[] = [];
 
     for (const shift of lastWeekShifts) {
       // Calculate the new dates (add 7 days)
