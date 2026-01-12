@@ -244,4 +244,9 @@ export class ShiftsController {
   delete(@Param('id') id: string, @Request() req) {
     return this.shiftsService.delete(id, req.user.id);
   }
+  @Delete('worker/:userId/future')
+  @ApiOperation({ summary: 'Delete all future shifts for a worker' })
+  deleteFutureShifts(@Param('userId') userId: string, @Request() req) {
+    return this.shiftsService.deleteFutureShiftsForWorker(req.user.companyId, userId, req.user.id);
+  }
 }
