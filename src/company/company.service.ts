@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+import { Decimal } from '@prisma/client/runtime/library';
 
 @Injectable()
 export class CompanyService {
@@ -21,15 +22,22 @@ export class CompanyService {
   async update(companyId: string, dto: UpdateCompanyDto) {
     const company = await this.findOne(companyId);
 
+    const updateData: any = {};
+
+    if (dto.name !== undefined) updateData.name = dto.name;
+    if (dto.address !== undefined) updateData.address = dto.address;
+    if (dto.city !== undefined) updateData.city = dto.city;
+    if (dto.state !== undefined) updateData.state = dto.state;
+    if (dto.zip !== undefined) updateData.zip = dto.zip;
+    if (dto.defaultHourlyRate !== undefined) {
+      updateData.defaultHourlyRate = dto.defaultHourlyRate 
+        ? new Decimal(dto.defaultHourlyRate) 
+        : null;
+    }
+
     return this.prisma.company.update({
       where: { id: companyId },
-      data: {
-        name: dto.name ?? company.name,
-        address: dto.address ?? company.address,
-        city: dto.city ?? company.city,
-        state: dto.state ?? company.state,
-        zip: dto.zip ?? company.zip,
-      },
+      data: updateData,
     });
   }
 }
