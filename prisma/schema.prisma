@@ -16,6 +16,7 @@ model Company {
   state                 String?
   zip                   String?
   inviteCode            String   @unique @default(uuid())
+  defaultHourlyRate     Decimal? @db.Decimal(10, 2)
   subscriptionTier      String   @default("basic")
   subscriptionStatus    String   @default("active")
   stripeCustomerId      String?
@@ -44,6 +45,7 @@ model Company {
 
   @@map("companies")
 }
+
 
 enum UserRole {
   WORKER
