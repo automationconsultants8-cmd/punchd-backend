@@ -1,4 +1,4 @@
-import { IsString, IsOptional } from 'class-validator';
+import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateCompanyDto {
@@ -26,4 +26,10 @@ export class UpdateCompanyDto {
   @IsString()
   @IsOptional()
   zip?: string;
+
+  @ApiPropertyOptional()
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  defaultHourlyRate?: number;
 }
