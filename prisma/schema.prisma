@@ -42,6 +42,10 @@ model Company {
   shiftRequests         ShiftRequest[]
   timeOffRequests       TimeOffRequest[]
   messages              Message[]
+  managerPermissions    ManagerPermission[]
+  managerLocationAssignments ManagerLocationAssignment[]
+  managerWorkerAssignments   ManagerWorkerAssignment[]
+  payPeriods            PayPeriod[]
 
   @@map("companies")
 }
@@ -106,10 +110,137 @@ model User {
   messagesReceived        Message[] @relation("MessageRecipient")
   
   pushTokens              PushToken[]
+  
+  // Manager-specific relations
+  managerPermission       ManagerPermission?
+  managedLocations        ManagerLocationAssignment[] @relation("ManagerLocations")
+  managedWorkers          ManagerWorkerAssignment[]   @relation("ManagedWorkers")
+  workerManagedBy         ManagerWorkerAssignment[]   @relation("WorkerManagers")
 
   @@unique([companyId, phone])
   @@index([companyId, email])
   @@map("users")
+}
+
+// Manager's permission toggles (controlled delegation)
+model ManagerPermission {
+  id                    String   @id @default(uuid())
+  userId                String   @unique  // The manager
+  companyId             String
+  
+  // Time Management
+  canApproveTime        Boolean  @default(true)
+  canEditTimePre        Boolean  @default(true)   // Edit before approval
+  canEditTimePost       Boolean  @default(false)  // Edit after approval (before lock)
+  canDeleteTime         Boolean  @default(false)
+  
+  // Viewing
+  canViewLaborCosts     Boolean  @default(false)
+  canViewAllLocations   Boolean  @default(false)  // false = scoped to assignments
+  canViewAllWorkers     Boolean  @default(false)  // false = scoped to assignments
+  
+  // Reports & Exports
+  canExportPayroll      Boolean  @default(false)
+  canViewAnalytics      Boolean  @default(false)
+  canGenerateReports    Boolean  @default(true)
+  
+  // Worker Management
+  canOnboardWorkers     Boolean  @default(false)
+  canDeactivateWorkers  Boolean  @default(false)
+  canEditWorkerRates    Boolean  @default(false)
+  
+  // Scheduling
+  canCreateShifts       Boolean  @default(true)
+  canEditShifts         Boolean  @default(true)
+  canDeleteShifts       Boolean  @default(false)
+  canApproveShiftSwaps  Boolean  @default(true)
+  canApproveTimeOff     Boolean  @default(true)
+  
+  // Violations
+  canReviewViolations   Boolean  @default(true)
+  canWaiveViolations    Boolean  @default(false)
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company               Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("manager_permissions")
+}
+
+// Which locations a manager can access (scoping)
+model ManagerLocationAssignment {
+  id          String   @id @default(uuid())
+  managerId   String
+  locationId  String   // jobId
+  companyId   String
+  assignedAt  DateTime @default(now())
+  assignedBy  String?  // Admin/Owner who assigned
+
+  manager     User     @relation("ManagerLocations", fields: [managerId], references: [id], onDelete: Cascade)
+  location    Job      @relation("LocationManagers", fields: [locationId], references: [id], onDelete: Cascade)
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([managerId, locationId])
+  @@index([companyId])
+  @@index([locationId])
+  @@map("manager_location_assignments")
+}
+
+// Which workers a manager can manage (scoping)
+model ManagerWorkerAssignment {
+  id          String   @id @default(uuid())
+  managerId   String
+  workerId    String
+  companyId   String
+  assignedAt  DateTime @default(now())
+  assignedBy  String?  // Admin/Owner who assigned
+
+  manager     User     @relation("ManagedWorkers", fields: [managerId], references: [id], onDelete: Cascade)
+  worker      User     @relation("WorkerManagers", fields: [workerId], references: [id], onDelete: Cascade)
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([managerId, workerId])
+  @@index([companyId])
+  @@index([workerId])
+  @@map("manager_worker_assignments")
+}
+
+// Pay period for locking timesheets
+enum PayPeriodStatus {
+  OPEN
+  LOCKED
+  EXPORTED
+}
+
+model PayPeriod {
+  id            String          @id @default(uuid())
+  companyId     String
+  startDate     DateTime        @db.Date
+  endDate       DateTime        @db.Date
+  status        PayPeriodStatus @default(OPEN)
+  
+  lockedAt      DateTime?
+  lockedById    String?
+  exportedAt    DateTime?
+  exportedById  String?
+  
+  // Override tracking (Owner only)
+  overrideAt    DateTime?
+  overrideById  String?
+  overrideReason String?
+  
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  company       Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, startDate, endDate])
+  @@index([companyId, status])
+  @@index([companyId, startDate])
+  @@map("pay_periods")
 }
 
 model WorkerJobRate {
@@ -169,6 +300,7 @@ model Job {
   shifts                Shift[]
   workerJobRates        WorkerJobRate[]
   certifiedPayrolls     CertifiedPayroll[]
+  managers              ManagerLocationAssignment[] @relation("LocationManagers")
 
   @@index([companyId, isActive])
   @@map("jobs")
@@ -221,6 +353,15 @@ model TimeEntry {
   restBreaksTaken   Int       @default(0)
   breakCompliant    Boolean   @default(true)
   breakPenaltyPay   Decimal?  @db.Decimal(10, 2)
+  
+  // Pay period locking
+  isLocked          Boolean   @default(false)
+  lockedAt          DateTime?
+  
+  // Edit tracking
+  lastEditedById    String?
+  lastEditedAt      DateTime?
+  editReason        String?
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -235,6 +376,7 @@ model TimeEntry {
 
   @@index([companyId, approvalStatus])
   @@index([userId, clockInTime])
+  @@index([companyId, isLocked])
   @@map("time_entries")
 }
 
@@ -575,6 +717,8 @@ enum AuditAction {
   PASSWORD_RESET
   TIME_ENTRY_APPROVED
   TIME_ENTRY_REJECTED
+  TIME_ENTRY_EDITED
+  TIME_ENTRY_DELETED
   PAY_RATE_UPDATED
   OVERTIME_SETTINGS_UPDATED
   BREAK_VIOLATION_WAIVED
@@ -589,6 +733,15 @@ enum AuditAction {
   TIME_OFF_REQUEST_DECLINED
   TIME_OFF_REQUEST_CANCELLED
   MESSAGE_SENT
+  MANAGER_PERMISSION_UPDATED
+  MANAGER_LOCATION_ASSIGNED
+  MANAGER_LOCATION_UNASSIGNED
+  MANAGER_WORKER_ASSIGNED
+  MANAGER_WORKER_UNASSIGNED
+  PAY_PERIOD_CREATED
+  PAY_PERIOD_LOCKED
+  PAY_PERIOD_UNLOCKED
+  PAY_PERIOD_EXPORTED
 }
 
 model AuditLog {
