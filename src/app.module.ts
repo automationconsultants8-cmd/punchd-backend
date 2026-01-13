@@ -20,6 +20,8 @@ import { ShiftRequestsModule } from './shift-requests/shift-requests.module';
 import { TimeOffModule } from './time-off/time-off.module';
 import { MessagesModule } from './messages/messages.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { RoleManagementModule } from './role-management/role-management.module';
+
 
 @Module({
   imports: [
@@ -47,6 +49,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     ShiftRequestsModule,
     TimeOffModule,
     MessagesModule,
+    RoleManagementModule,
   ],
 })
 export class AppModule {}
