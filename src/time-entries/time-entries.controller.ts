@@ -121,7 +121,20 @@ export class TimeEntriesController {
       endDate: endDate ? new Date(endDate) : undefined,
       format: format || 'csv',
     });
-    @Get('export/csv')
+
+    const extension = format === 'iif' ? 'iif' : 'csv';
+    const contentType = format === 'iif' ? 'application/x-iif' : 'text/csv';
+
+    res.set({
+      'Content-Type': contentType,
+      'Content-Disposition': `attachment; filename=quickbooks-timesheet-${startDate || 'all'}-to-${endDate || 'present'}.${extension}`,
+      'Content-Length': Buffer.byteLength(result),
+    });
+
+    res.send(result);
+  }
+
+  @Get('export/csv')
   @ApiOperation({ summary: 'Export time entries to CSV' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
@@ -211,18 +224,6 @@ export class TimeEntriesController {
     res.set({
       'Content-Type': 'text/csv',
       'Content-Disposition': `attachment; filename=paychex-timesheet-${startDate || 'all'}-to-${endDate || 'present'}.csv`,
-      'Content-Length': Buffer.byteLength(result),
-    });
-
-    res.send(result);
-  }
-
-    const extension = format === 'iif' ? 'iif' : 'csv';
-    const contentType = format === 'iif' ? 'application/x-iif' : 'text/csv';
-
-    res.set({
-      'Content-Type': contentType,
-      'Content-Disposition': `attachment; filename=quickbooks-timesheet-${startDate || 'all'}-to-${endDate || 'present'}.${extension}`,
       'Content-Length': Buffer.byteLength(result),
     });
 
