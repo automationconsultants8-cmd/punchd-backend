@@ -1,8 +1,10 @@
-import { Controller, Post, Body, Get, HttpCode, HttpStatus, Req, UnauthorizedException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Controller, Post, Body, Get, HttpCode, HttpStatus, Req, UnauthorizedException, UseGuards, Request, ForbiddenException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { LoginWithPasswordDto, SetPasswordDto } from './dto/login-password.dto';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -12,6 +14,10 @@ export class AuthController {
     private prisma: PrismaService,
     private jwtService: JwtService,
   ) {}
+
+  // ============================================
+  // OTP-BASED AUTH (Workers - Mobile App)
+  // ============================================
 
   @Post('send-otp')
   @HttpCode(HttpStatus.OK)
@@ -29,14 +35,21 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Login after OTP verification' })
+  @ApiOperation({ summary: 'Login after OTP verification (Mobile - Workers)' })
   async login(@Body() body: { phone: string }) {
     return this.authService.login(body.phone);
   }
 
+  @Post('verify-otp-and-login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify OTP and login in one step (Mobile - Workers)' })
+  async verifyOtpAndLogin(@Body() body: { phone: string; code: string }) {
+    return this.authService.verifyOTPAndLogin(body.phone, body.code);
+  }
+
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Register new worker' })
+  @ApiOperation({ summary: 'Register new worker (Mobile App)' })
   async register(@Body() body: {
     phone: string;
     name: string;
@@ -47,22 +60,50 @@ export class AuthController {
     return this.authService.register(body);
   }
 
+  // ============================================
+  // PASSWORD-BASED AUTH (Manager/Admin/Owner - Dashboard)
+  // ============================================
+
+  @Post('login/dashboard')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Login with email/password (Manager/Admin/Owner - Dashboard)' })
+  async loginWithPassword(@Body() dto: LoginWithPasswordDto) {
+    return this.authService.loginWithPassword(dto.email, dto.password);
+  }
+
+  @Post('set-password')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Set password for a user (Owner/Admin only)' })
+  async setPassword(@Request() req, @Body() dto: SetPasswordDto) {
+    // Only Owner/Admin can set passwords
+    if (req.user.role !== 'OWNER' && req.user.role !== 'ADMIN') {
+      throw new ForbiddenException('Only owners and admins can set passwords');
+    }
+    return this.authService.setPassword(dto.userId, dto.password, req.user.companyId);
+  }
+
+  // ============================================
+  // CURRENT USER
+  // ============================================
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get current user with permissions' })
+  async getCurrentUser(@Request() req) {
+    return this.authService.getCurrentUser(req.user.userId, req.user.companyId);
+  }
+
+  // ============================================
+  // UTILITIES
+  // ============================================
+
   @Get('companies')
   @ApiOperation({ summary: 'Get list of companies' })
   async getCompanies() {
     return this.authService.getCompanies();
-  }
-
-  @Post('set-trial-test')
-  @HttpCode(HttpStatus.OK)
-  async setTrialTest(@Body() body: { days: number }) {
-    const companies = await this.prisma.company.updateMany({
-      data: {
-        subscriptionTier: 'trial',
-        trialEndsAt: new Date(Date.now() + (body.days || 2) * 24 * 60 * 60 * 1000)
-      }
-    });
-    return { updated: companies.count };
   }
 
   @Get('subscription-status')
@@ -113,23 +154,46 @@ export class AuthController {
     };
   }
 
+  // ============================================
+  // TEST/DEV ENDPOINTS (Remove in production)
+  // ============================================
+
+  @Post('set-trial-test')
+  @HttpCode(HttpStatus.OK)
+  async setTrialTest(@Body() body: { days: number }) {
+    const companies = await this.prisma.company.updateMany({
+      data: {
+        subscriptionTier: 'trial',
+        trialEndsAt: new Date(Date.now() + (body.days || 2) * 24 * 60 * 60 * 1000)
+      }
+    });
+    return { updated: companies.count };
+  }
+
   @Post('reset-database-test')
   @HttpCode(HttpStatus.OK)
   async resetDatabaseTest() {
+    // Delete in order to respect foreign keys
     await this.prisma.auditLog.deleteMany();
     await this.prisma.breakViolation.deleteMany();
     await this.prisma.faceVerificationLog.deleteMany();
+    await this.prisma.violation.deleteMany();
     await this.prisma.timeEntry.deleteMany();
+    await this.prisma.shiftOffer.deleteMany();
     await this.prisma.shiftRequest.deleteMany();
     await this.prisma.timeOffRequest.deleteMany();
     await this.prisma.message.deleteMany();
     await this.prisma.shift.deleteMany();
     await this.prisma.workerJobRate.deleteMany();
     await this.prisma.certifiedPayroll.deleteMany();
-    await this.prisma.violation.deleteMany();
+    await this.prisma.managerPermission.deleteMany();
+    await this.prisma.managerLocationAssignment.deleteMany();
+    await this.prisma.managerWorkerAssignment.deleteMany();
+    await this.prisma.payPeriod.deleteMany();
     await this.prisma.job.deleteMany();
     await this.prisma.passwordResetToken.deleteMany();
     await this.prisma.pushToken.deleteMany();
+    await this.prisma.otpCode.deleteMany();
     await this.prisma.user.deleteMany();
     await this.prisma.company.deleteMany();
     
