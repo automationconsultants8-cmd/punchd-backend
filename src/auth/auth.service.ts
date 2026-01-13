@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { AwsService } from '../aws/aws.service';
+import * as bcrypt from 'bcrypt';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const twilio = require('twilio');
@@ -32,6 +33,10 @@ export class AuthService {
       console.warn('⚠️ Twilio credentials not found - SMS will be mocked');
     }
   }
+
+  // ============================================
+  // OTP-BASED AUTH (Workers - Mobile App)
+  // ============================================
 
   async sendOTP(phone: string): Promise<{ success: boolean; expiresIn: number }> {
     // Rate limiting check
@@ -157,6 +162,165 @@ export class AuthService {
       } : undefined,
     };
   }
+
+  // ============================================
+  // PASSWORD-BASED AUTH (Manager/Admin/Owner - Dashboard)
+  // ============================================
+
+  async loginWithPassword(email: string, password: string): Promise<{ accessToken: string; user: any }> {
+    // Find user by email
+    const user = await this.prisma.user.findFirst({
+      where: { 
+        email: email.toLowerCase().trim(),
+        isActive: true,
+      },
+      include: { 
+        company: true,
+        managerPermission: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    // Workers cannot login to dashboard
+    if (user.role === 'WORKER') {
+      throw new ForbiddenException('Workers must use the mobile app to clock in. Dashboard access is for managers and administrators only.');
+    }
+
+    // Check password exists
+    if (!user.passwordHash) {
+      throw new UnauthorizedException('Password not set. Please contact your administrator to set up dashboard access.');
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    // Check approval status
+    if (user.approvalStatus === 'PENDING') {
+      throw new ForbiddenException('Your account is pending approval.');
+    }
+
+    if (user.approvalStatus === 'REJECTED') {
+      throw new ForbiddenException('Your account has been rejected. Please contact your administrator.');
+    }
+
+    // Build JWT payload
+    const payload = {
+      userId: user.id,
+      companyId: user.companyId,
+      role: user.role,
+      email: user.email,
+    };
+
+    const accessToken = this.jwtService.sign(payload);
+
+    // Log the login
+    await this.prisma.auditLog.create({
+      data: {
+        companyId: user.companyId,
+        userId: user.id,
+        action: 'LOGIN',
+        details: { method: 'password', role: user.role },
+      },
+    });
+
+    console.log(`🔐 Dashboard login: ${user.name} (${user.role}) - ${user.email}`);
+
+    // Build response based on role
+    const response: any = {
+      accessToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        companyId: user.companyId,
+        companyName: user.company.name,
+      },
+    };
+
+    // Include permissions for managers
+    if (user.role === 'MANAGER' && user.managerPermission) {
+      response.user.permissions = {
+        canApproveTime: user.managerPermission.canApproveTime,
+        canEditTimePre: user.managerPermission.canEditTimePre,
+        canEditTimePost: user.managerPermission.canEditTimePost,
+        canDeleteTime: user.managerPermission.canDeleteTime,
+        canViewLaborCosts: user.managerPermission.canViewLaborCosts,
+        canViewAllLocations: user.managerPermission.canViewAllLocations,
+        canViewAllWorkers: user.managerPermission.canViewAllWorkers,
+        canExportPayroll: user.managerPermission.canExportPayroll,
+        canViewAnalytics: user.managerPermission.canViewAnalytics,
+        canGenerateReports: user.managerPermission.canGenerateReports,
+        canOnboardWorkers: user.managerPermission.canOnboardWorkers,
+        canDeactivateWorkers: user.managerPermission.canDeactivateWorkers,
+        canEditWorkerRates: user.managerPermission.canEditWorkerRates,
+        canCreateShifts: user.managerPermission.canCreateShifts,
+        canEditShifts: user.managerPermission.canEditShifts,
+        canDeleteShifts: user.managerPermission.canDeleteShifts,
+        canApproveShiftSwaps: user.managerPermission.canApproveShiftSwaps,
+        canApproveTimeOff: user.managerPermission.canApproveTimeOff,
+        canReviewViolations: user.managerPermission.canReviewViolations,
+        canWaiveViolations: user.managerPermission.canWaiveViolations,
+      };
+
+      // Get manager's assigned locations
+      const locationAssignments = await this.prisma.managerLocationAssignment.findMany({
+        where: { managerId: user.id },
+        select: { locationId: true },
+      });
+      response.user.assignedLocationIds = locationAssignments.map(a => a.locationId);
+
+      // Get manager's assigned workers
+      const workerAssignments = await this.prisma.managerWorkerAssignment.findMany({
+        where: { managerId: user.id },
+        select: { workerId: true },
+      });
+      response.user.assignedWorkerIds = workerAssignments.map(a => a.workerId);
+    }
+
+    return response;
+  }
+
+  // ============================================
+  // SET PASSWORD (for new managers/admins)
+  // ============================================
+
+  async setPassword(userId: string, password: string, companyId: string): Promise<{ success: boolean }> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, companyId },
+    });
+
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+
+    if (user.role === 'WORKER') {
+      throw new BadRequestException('Workers do not need dashboard passwords');
+    }
+
+    // Hash password
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    console.log(`🔑 Password set for ${user.name} (${user.role})`);
+
+    return { success: true };
+  }
+
+  // ============================================
+  // WORKER REGISTRATION (Mobile App)
+  // ============================================
 
   async register(data: {
     phone: string;
@@ -300,6 +464,10 @@ export class AuthService {
     };
   }
 
+  // ============================================
+  // WORKER LOGIN (Mobile App - OTP)
+  // ============================================
+
   async login(phone: string): Promise<{ accessToken: string; user: any }> {
     const user = await this.prisma.user.findFirst({
       where: { phone },
@@ -331,6 +499,16 @@ export class AuthService {
 
     const accessToken = this.jwtService.sign(payload);
 
+    // Log the login
+    await this.prisma.auditLog.create({
+      data: {
+        companyId: user.companyId,
+        userId: user.id,
+        action: 'LOGIN',
+        details: { method: 'otp', role: user.role },
+      },
+    });
+
     return {
       accessToken,
       user: {
@@ -354,6 +532,10 @@ export class AuthService {
     return this.login(phone);
   }
 
+  // ============================================
+  // VALIDATION & UTILITIES
+  // ============================================
+
   async validateUser(userId: string, companyId: string): Promise<any> {
     const user = await this.prisma.user.findFirst({
       where: { id: userId, companyId, isActive: true, approvalStatus: 'APPROVED' },
@@ -369,5 +551,72 @@ export class AuthService {
 
   async getCompanies() {
     return [];
+  }
+
+  // Get current user with permissions (for dashboard)
+  async getCurrentUser(userId: string, companyId: string): Promise<any> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, companyId, isActive: true },
+      include: { 
+        company: true,
+        managerPermission: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const response: any = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      companyId: user.companyId,
+      companyName: user.company.name,
+    };
+
+    // Include permissions for managers
+    if (user.role === 'MANAGER' && user.managerPermission) {
+      response.permissions = {
+        canApproveTime: user.managerPermission.canApproveTime,
+        canEditTimePre: user.managerPermission.canEditTimePre,
+        canEditTimePost: user.managerPermission.canEditTimePost,
+        canDeleteTime: user.managerPermission.canDeleteTime,
+        canViewLaborCosts: user.managerPermission.canViewLaborCosts,
+        canViewAllLocations: user.managerPermission.canViewAllLocations,
+        canViewAllWorkers: user.managerPermission.canViewAllWorkers,
+        canExportPayroll: user.managerPermission.canExportPayroll,
+        canViewAnalytics: user.managerPermission.canViewAnalytics,
+        canGenerateReports: user.managerPermission.canGenerateReports,
+        canOnboardWorkers: user.managerPermission.canOnboardWorkers,
+        canDeactivateWorkers: user.managerPermission.canDeactivateWorkers,
+        canEditWorkerRates: user.managerPermission.canEditWorkerRates,
+        canCreateShifts: user.managerPermission.canCreateShifts,
+        canEditShifts: user.managerPermission.canEditShifts,
+        canDeleteShifts: user.managerPermission.canDeleteShifts,
+        canApproveShiftSwaps: user.managerPermission.canApproveShiftSwaps,
+        canApproveTimeOff: user.managerPermission.canApproveTimeOff,
+        canReviewViolations: user.managerPermission.canReviewViolations,
+        canWaiveViolations: user.managerPermission.canWaiveViolations,
+      };
+
+      // Get manager's assigned locations
+      const locationAssignments = await this.prisma.managerLocationAssignment.findMany({
+        where: { managerId: user.id },
+        select: { locationId: true },
+      });
+      response.assignedLocationIds = locationAssignments.map(a => a.locationId);
+
+      // Get manager's assigned workers
+      const workerAssignments = await this.prisma.managerWorkerAssignment.findMany({
+        where: { managerId: user.id },
+        select: { workerId: true },
+      });
+      response.assignedWorkerIds = workerAssignments.map(a => a.workerId);
+    }
+
+    return response;
   }
 }
