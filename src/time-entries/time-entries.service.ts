@@ -1225,4 +1225,395 @@ const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00-08:00`);
 
     return lines.join('\r\n');
   }
+
+  // ============================================
+  // NEW PAYROLL EXPORT METHODS
+  // ============================================
+
+  /**
+   * Generic CSV Export - Works with any payroll system
+   */
+  async exportToCsv(
+    companyId: string,
+    filters: { startDate?: Date; endDate?: Date }
+  ): Promise<string> {
+    const where: any = { companyId, clockOutTime: { not: null } };
+
+    if (filters.startDate || filters.endDate) {
+      where.clockInTime = {};
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        job: { select: { id: true, name: true, address: true } },
+      },
+      orderBy: [{ userId: 'asc' }, { clockInTime: 'asc' }],
+    });
+
+    const lines: string[] = [];
+    
+    // Standard CSV header
+    lines.push([
+      'Employee Name',
+      'Employee ID',
+      'Date',
+      'Location',
+      'Clock In',
+      'Clock Out',
+      'Break (mins)',
+      'Regular Hours',
+      'Overtime Hours',
+      'Double Time Hours',
+      'Total Hours',
+      'Hourly Rate',
+      'Total Pay',
+      'Status'
+    ].join(','));
+
+    for (const entry of entries) {
+      const date = entry.clockInTime 
+        ? new Date(entry.clockInTime).toLocaleDateString('en-US')
+        : '';
+      const clockIn = entry.clockInTime
+        ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        : '';
+      const clockOut = entry.clockOutTime
+        ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        : '';
+
+      const escapeCsv = (val: string) => {
+        if (val && (val.includes(',') || val.includes('"') || val.includes('\n'))) {
+          return `"${val.replace(/"/g, '""')}"`;
+        }
+        return val || '';
+      };
+
+      lines.push([
+        escapeCsv(entry.user?.name || 'Unknown'),
+        entry.userId,
+        date,
+        escapeCsv(entry.job?.name || 'Unassigned'),
+        clockIn,
+        clockOut,
+        (entry.breakMinutes || 0).toString(),
+        ((entry.regularMinutes || 0) / 60).toFixed(2),
+        ((entry.overtimeMinutes || 0) / 60).toFixed(2),
+        ((entry.doubleTimeMinutes || 0) / 60).toFixed(2),
+        ((entry.durationMinutes || 0) / 60).toFixed(2),
+        entry.hourlyRate ? Number(entry.hourlyRate).toFixed(2) : '0.00',
+        entry.laborCost ? Number(entry.laborCost).toFixed(2) : '0.00',
+        entry.approvalStatus || 'PENDING'
+      ].join(','));
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * ADP Workforce Now Export Format
+   * Reference: ADP Time Import Template
+   */
+  async exportToAdp(
+    companyId: string,
+    filters: { startDate?: Date; endDate?: Date }
+  ): Promise<string> {
+    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED' };
+
+    if (filters.startDate || filters.endDate) {
+      where.clockInTime = {};
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        job: { select: { id: true, name: true } },
+      },
+      orderBy: [{ userId: 'asc' }, { clockInTime: 'asc' }],
+    });
+
+    const lines: string[] = [];
+    
+    // ADP standard import headers
+    lines.push([
+      'Co Code',
+      'Batch ID',
+      'File #',
+      'Employee Name',
+      'Reg Hours',
+      'O/T Hours',
+      'Hours 3 Code',
+      'Hours 3 Amount',
+      'Earnings 3 Code',
+      'Earnings 3 Amount',
+      'Memo Code',
+      'Memo Amount'
+    ].join(','));
+
+    // Group entries by employee for ADP batch processing
+    const byEmployee: Record<string, any[]> = {};
+    for (const entry of entries) {
+      const empId = entry.userId;
+      if (!byEmployee[empId]) byEmployee[empId] = [];
+      byEmployee[empId].push(entry);
+    }
+
+    for (const [empId, empEntries] of Object.entries(byEmployee)) {
+      let totalRegular = 0;
+      let totalOT = 0;
+      let totalDT = 0;
+      
+      for (const entry of empEntries) {
+        totalRegular += (entry.regularMinutes || 0) / 60;
+        totalOT += (entry.overtimeMinutes || 0) / 60;
+        totalDT += (entry.doubleTimeMinutes || 0) / 60;
+      }
+
+      const emp = empEntries[0]?.user;
+      
+      lines.push([
+        '', // Co Code - company fills in
+        '', // Batch ID - auto-generated
+        empId.substring(0, 6), // File # (employee ID, truncated)
+        `"${emp?.name || 'Unknown'}"`,
+        totalRegular.toFixed(2),
+        totalOT.toFixed(2),
+        totalDT > 0 ? 'DT' : '', // Hours 3 Code for double time
+        totalDT > 0 ? totalDT.toFixed(2) : '',
+        '', // Earnings 3 Code
+        '', // Earnings 3 Amount
+        '', // Memo Code
+        ''  // Memo Amount
+      ].join(','));
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Gusto Payroll Export Format
+   * Reference: Gusto Hours Import CSV
+   */
+  async exportToGusto(
+    companyId: string,
+    filters: { startDate?: Date; endDate?: Date }
+  ): Promise<string> {
+    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED' };
+
+    if (filters.startDate || filters.endDate) {
+      where.clockInTime = {};
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        job: { select: { id: true, name: true } },
+      },
+      orderBy: [{ userId: 'asc' }, { clockInTime: 'asc' }],
+    });
+
+    const lines: string[] = [];
+    
+    // Gusto CSV headers
+    lines.push([
+      'Employee First Name',
+      'Employee Last Name',
+      'Employee Email',
+      'Pay Period Start',
+      'Pay Period End',
+      'Regular Hours',
+      'Overtime Hours',
+      'Double Overtime Hours',
+      'PTO Hours',
+      'Sick Hours',
+      'Holiday Hours'
+    ].join(','));
+
+    // Determine pay period from filters
+    const periodStart = filters.startDate 
+      ? new Date(filters.startDate).toLocaleDateString('en-US')
+      : '';
+    const periodEnd = filters.endDate
+      ? new Date(filters.endDate).toLocaleDateString('en-US')
+      : '';
+
+    // Group entries by employee
+    const byEmployee: Record<string, any[]> = {};
+    for (const entry of entries) {
+      const empId = entry.userId;
+      if (!byEmployee[empId]) byEmployee[empId] = [];
+      byEmployee[empId].push(entry);
+    }
+
+    for (const [empId, empEntries] of Object.entries(byEmployee)) {
+      let totalRegular = 0;
+      let totalOT = 0;
+      let totalDT = 0;
+      
+      for (const entry of empEntries) {
+        totalRegular += (entry.regularMinutes || 0) / 60;
+        totalOT += (entry.overtimeMinutes || 0) / 60;
+        totalDT += (entry.doubleTimeMinutes || 0) / 60;
+      }
+
+      const emp = empEntries[0]?.user;
+      const nameParts = (emp?.name || 'Unknown').split(' ');
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      
+      lines.push([
+        `"${firstName}"`,
+        `"${lastName}"`,
+        '', // Email - not stored, leave blank
+        periodStart,
+        periodEnd,
+        totalRegular.toFixed(2),
+        totalOT.toFixed(2),
+        totalDT.toFixed(2),
+        '0.00', // PTO
+        '0.00', // Sick
+        '0.00'  // Holiday
+      ].join(','));
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Paychex Flex Export Format
+   * Reference: Paychex Time Import Specification
+   */
+  async exportToPaychex(
+    companyId: string,
+    filters: { startDate?: Date; endDate?: Date }
+  ): Promise<string> {
+    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED' };
+
+    if (filters.startDate || filters.endDate) {
+      where.clockInTime = {};
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        job: { select: { id: true, name: true } },
+      },
+      orderBy: [{ userId: 'asc' }, { clockInTime: 'asc' }],
+    });
+
+    const lines: string[] = [];
+    
+    // Paychex CSV headers
+    lines.push([
+      'Worker ID',
+      'Last Name',
+      'First Name',
+      'Check Date',
+      'Earnings Code',
+      'Hours',
+      'Rate',
+      'Amount',
+      'Department',
+      'Location'
+    ].join(','));
+
+    for (const entry of entries) {
+      const emp = entry.user;
+      const nameParts = (emp?.name || 'Unknown').split(' ');
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      const checkDate = entry.clockInTime 
+        ? new Date(entry.clockInTime).toLocaleDateString('en-US')
+        : '';
+      const rate = entry.hourlyRate ? Number(entry.hourlyRate) : 0;
+
+      const escapeCsv = (val: string) => {
+        if (val && (val.includes(',') || val.includes('"') || val.includes('\n'))) {
+          return `"${val.replace(/"/g, '""')}"`;
+        }
+        return val || '';
+      };
+
+      // Regular hours
+      if ((entry.regularMinutes || 0) > 0) {
+        const regHours = (entry.regularMinutes || 0) / 60;
+        lines.push([
+          entry.userId.substring(0, 10),
+          escapeCsv(lastName),
+          escapeCsv(firstName),
+          checkDate,
+          'REG', // Earnings Code
+          regHours.toFixed(2),
+          rate.toFixed(2),
+          (regHours * rate).toFixed(2),
+          '', // Department
+          escapeCsv(entry.job?.name || '')
+        ].join(','));
+      }
+
+      // Overtime hours (separate line)
+      if ((entry.overtimeMinutes || 0) > 0) {
+        const otHours = (entry.overtimeMinutes || 0) / 60;
+        lines.push([
+          entry.userId.substring(0, 10),
+          escapeCsv(lastName),
+          escapeCsv(firstName),
+          checkDate,
+          'OT', // Earnings Code
+          otHours.toFixed(2),
+          (rate * 1.5).toFixed(2),
+          (otHours * rate * 1.5).toFixed(2),
+          '',
+          escapeCsv(entry.job?.name || '')
+        ].join(','));
+      }
+
+      // Double time hours (separate line)
+      if ((entry.doubleTimeMinutes || 0) > 0) {
+        const dtHours = (entry.doubleTimeMinutes || 0) / 60;
+        lines.push([
+          entry.userId.substring(0, 10),
+          escapeCsv(lastName),
+          escapeCsv(firstName),
+          checkDate,
+          'DT', // Earnings Code
+          dtHours.toFixed(2),
+          (rate * 2).toFixed(2),
+          (dtHours * rate * 2).toFixed(2),
+          '',
+          escapeCsv(entry.job?.name || '')
+        ].join(','));
+      }
+    }
+
+    return lines.join('\n');
+  }
 }
