@@ -48,6 +48,75 @@ export class EmailService {
     return { success: true };
   }
 
+  async sendWelcomeEmail(email: string, name: string, role: string): Promise<void> {
+    const roleDisplay = role === 'MANAGER' ? 'Manager' : 'Administrator';
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #C9A227; padding: 20px; text-align: center;">
+          <h1 style="color: white; margin: 0;">Welcome to Punch'd</h1>
+        </div>
+        <div style="padding: 30px; background: #f9f9f9;">
+          <h2 style="color: #333;">Hi ${name},</h2>
+          <p style="color: #666; font-size: 16px; line-height: 1.6;">
+            You've been added as a <strong>${roleDisplay}</strong> on Punch'd.
+          </p>
+          <p style="color: #666; font-size: 16px; line-height: 1.6;">
+            You can now log in to the dashboard at:
+          </p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="https://app.gopunchd.com" 
+               style="background: #C9A227; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold;">
+              Go to Dashboard
+            </a>
+          </div>
+          <p style="color: #666; font-size: 14px;">
+            Use your email and password to sign in.
+          </p>
+        </div>
+        <div style="padding: 20px; text-align: center; color: #999; font-size: 12px;">
+          <p>© ${new Date().getFullYear()} Punch'd by Krynovo</p>
+        </div>
+      </div>
+    `;
+
+    await this.sendEmail(email, `Welcome to Punch'd - You're now a ${roleDisplay}`, html);
+  }
+
+  async sendRoleChangeEmail(email: string, name: string, newRole: string): Promise<void> {
+    const roleDisplay = newRole === 'MANAGER' ? 'Manager' : newRole === 'ADMIN' ? 'Administrator' : 'Worker';
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #C9A227; padding: 20px; text-align: center;">
+          <h1 style="color: white; margin: 0;">Role Updated</h1>
+        </div>
+        <div style="padding: 30px; background: #f9f9f9;">
+          <h2 style="color: #333;">Hi ${name},</h2>
+          <p style="color: #666; font-size: 16px; line-height: 1.6;">
+            Your role on Punch'd has been updated to <strong>${roleDisplay}</strong>.
+          </p>
+          ${newRole !== 'WORKER' ? `
+          <p style="color: #666; font-size: 16px; line-height: 1.6;">
+            You can now access the dashboard at:
+          </p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="https://app.gopunchd.com" 
+               style="background: #C9A227; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold;">
+              Go to Dashboard
+            </a>
+          </div>
+          ` : ''}
+        </div>
+        <div style="padding: 20px; text-align: center; color: #999; font-size: 12px;">
+          <p>© ${new Date().getFullYear()} Punch'd by Krynovo</p>
+        </div>
+      </div>
+    `;
+
+    await this.sendEmail(email, `Your Punch'd role has been updated to ${roleDisplay}`, html);
+  }
+
   async sendWeeklyReport(toEmail: string, companyId: string) {
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
