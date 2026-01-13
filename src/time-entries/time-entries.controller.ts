@@ -121,6 +121,101 @@ export class TimeEntriesController {
       endDate: endDate ? new Date(endDate) : undefined,
       format: format || 'csv',
     });
+    @Get('export/csv')
+  @ApiOperation({ summary: 'Export time entries to CSV' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  async exportCsv(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const result = await this.timeEntriesService.exportToCsv(req.user.companyId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+
+    res.set({
+      'Content-Type': 'text/csv',
+      'Content-Disposition': `attachment; filename=timesheet-${startDate || 'all'}-to-${endDate || 'present'}.csv`,
+      'Content-Length': Buffer.byteLength(result),
+    });
+
+    res.send(result);
+  }
+
+  @Get('export/adp')
+  @ApiOperation({ summary: 'Export time entries to ADP format' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  async exportAdp(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const result = await this.timeEntriesService.exportToAdp(req.user.companyId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+
+    res.set({
+      'Content-Type': 'text/csv',
+      'Content-Disposition': `attachment; filename=adp-timesheet-${startDate || 'all'}-to-${endDate || 'present'}.csv`,
+      'Content-Length': Buffer.byteLength(result),
+    });
+
+    res.send(result);
+  }
+
+  @Get('export/gusto')
+  @ApiOperation({ summary: 'Export time entries to Gusto format' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  async exportGusto(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const result = await this.timeEntriesService.exportToGusto(req.user.companyId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+
+    res.set({
+      'Content-Type': 'text/csv',
+      'Content-Disposition': `attachment; filename=gusto-timesheet-${startDate || 'all'}-to-${endDate || 'present'}.csv`,
+      'Content-Length': Buffer.byteLength(result),
+    });
+
+    res.send(result);
+  }
+
+  @Get('export/paychex')
+  @ApiOperation({ summary: 'Export time entries to Paychex format' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  async exportPaychex(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const result = await this.timeEntriesService.exportToPaychex(req.user.companyId, {
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+
+    res.set({
+      'Content-Type': 'text/csv',
+      'Content-Disposition': `attachment; filename=paychex-timesheet-${startDate || 'all'}-to-${endDate || 'present'}.csv`,
+      'Content-Length': Buffer.byteLength(result),
+    });
+
+    res.send(result);
+  }
 
     const extension = format === 'iif' ? 'iif' : 'csv';
     const contentType = format === 'iif' ? 'application/x-iif' : 'text/csv';
