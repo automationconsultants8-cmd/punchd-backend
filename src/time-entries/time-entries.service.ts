@@ -106,7 +106,7 @@ export class TimeEntriesService {
             dto.photoUrl,
           );
 
-          const matched = confidence >= 80;
+          const matched = confidence >= 92;
 
           await this.prisma.faceVerificationLog.create({
             data: {
