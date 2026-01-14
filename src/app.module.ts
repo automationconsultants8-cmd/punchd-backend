@@ -21,6 +21,7 @@ import { TimeOffModule } from './time-off/time-off.module';
 import { MessagesModule } from './messages/messages.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { RoleManagementModule } from './role-management/role-management.module';
+import { PayPeriodsModule } from './pay-periods/pay-periods.module';
 
 
 @Module({
@@ -50,6 +51,7 @@ import { RoleManagementModule } from './role-management/role-management.module';
     TimeOffModule,
     MessagesModule,
     RoleManagementModule,
+    PayPeriodsModule,
   ],
 })
 export class AppModule {}
