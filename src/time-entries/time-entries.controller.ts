@@ -5,8 +5,8 @@ import { TimeEntriesService } from './time-entries.service';
 import { ClockInDto, ClockOutDto } from './dto';
 import { ApproveTimeEntryDto, BulkApproveDto, BulkRejectDto } from './dto/approve-time-entry.dto';
 import { CreateManualEntryDto } from './dto/create-manual-entry.dto';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateTimeEntryDto } from './dto/update-time-entry.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Time Entries')
 @Controller('time-entries')
@@ -305,22 +305,23 @@ export class TimeEntriesController {
   ) {
     return this.timeEntriesService.rejectEntry(id, req.user.userId, req.user.companyId, dto.rejectionReason);
   }
- 
+
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'OWNER', 'MANAGER')
-  async updateEntry(
-  @Param('id') id: string,
-  @Request() req,
-  @Body() updateDto: UpdateTimeEntryDto,
-) {
-  return this.timeEntriesService.updateEntry(
-    id,
-    req.user.companyId,
-    req.user.id,
-    updateDto,
-  );
-}
+  @ApiOperation({ summary: 'Update a time entry' })
+  @ApiParam({ name: 'id', description: 'Time entry ID' })
+  updateEntry(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() updateDto: UpdateTimeEntryDto,
+  ) {
+    return this.timeEntriesService.updateEntry(
+      id,
+      req.user.companyId,
+      req.user.userId,
+      updateDto,
+    );
+  }
+
   @Post('bulk-approve')
   @ApiOperation({ summary: 'Approve multiple time entries at once' })
   bulkApprove(
