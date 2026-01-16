@@ -1616,4 +1616,169 @@ const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00-08:00`);
 
     return lines.join('\n');
   }
+  // ============================================
+  // ADD THIS METHOD TO time-entries.service.ts
+  // Place it before the final closing }
+  // ============================================
+
+  /**
+   * Update a time entry (for editing clock in/out, break, location, notes)
+   */
+  async updateEntry(
+    entryId: string,
+    companyId: string,
+    editedById: string,
+    updateData: {
+      clockInTime?: string;
+      clockOutTime?: string;
+      breakMinutes?: number;
+      jobId?: string;
+      notes?: string;
+    },
+  ) {
+    // Find existing entry
+    const entry = await this.prisma.timeEntry.findFirst({
+      where: { id: entryId, companyId },
+      include: { user: true, job: true },
+    });
+
+    if (!entry) {
+      throw new NotFoundException('Time entry not found');
+    }
+
+    // Check if entry is locked
+    if (entry.isLocked) {
+      throw new BadRequestException('Cannot edit a locked time entry. Unlock the pay period first.');
+    }
+
+    // Check if pay period is exported (for amendment flag)
+    let isAmendedAfterExport = false;
+    const payPeriod = await this.prisma.payPeriod.findFirst({
+      where: {
+        companyId,
+        startDate: { lte: new Date(entry.clockInTime) },
+        endDate: { gte: new Date(entry.clockInTime) },
+      },
+    });
+
+    if (payPeriod?.status === 'EXPORTED') {
+      isAmendedAfterExport = true;
+    }
+
+    // Store old values for audit
+    const oldValues = {
+      clockInTime: entry.clockInTime,
+      clockOutTime: entry.clockOutTime,
+      breakMinutes: entry.breakMinutes,
+      jobId: entry.jobId,
+      notes: entry.notes,
+    };
+
+    // Parse times - use existing if not provided
+    const clockInTime = updateData.clockInTime 
+      ? new Date(updateData.clockInTime) 
+      : entry.clockInTime;
+    const clockOutTime = updateData.clockOutTime 
+      ? new Date(updateData.clockOutTime) 
+      : entry.clockOutTime;
+    const breakMinutes = updateData.breakMinutes ?? entry.breakMinutes ?? 0;
+
+    // Validate clock out is after clock in
+    if (clockOutTime && clockOutTime <= clockInTime) {
+      throw new BadRequestException('Clock out time must be after clock in time');
+    }
+
+    // Validate not more than 24 hours
+    if (clockOutTime) {
+      const diffMs = clockOutTime.getTime() - clockInTime.getTime();
+      const diffHours = diffMs / (1000 * 60 * 60);
+      if (diffHours > 24) {
+        throw new BadRequestException('Time entry cannot exceed 24 hours');
+      }
+    }
+
+    // Calculate duration and overtime
+    let durationMinutes: number | null = null;
+    let regularMinutes = 0;
+    let overtimeMinutes = 0;
+    let doubleTimeMinutes = 0;
+    let laborCost: number | null = null;
+
+    if (clockOutTime) {
+      const diffMs = clockOutTime.getTime() - clockInTime.getTime();
+      const totalMinutes = Math.round(diffMs / (1000 * 60));
+      durationMinutes = totalMinutes - breakMinutes;
+
+      // Recalculate overtime using existing method
+      const jobId = updateData.jobId !== undefined ? updateData.jobId : entry.jobId;
+      const overtimeCalc = await this.calculateOvertimeForEntry(
+        entry.userId,
+        companyId,
+        jobId,
+        clockInTime,
+        durationMinutes,
+      );
+
+      regularMinutes = overtimeCalc.regularMinutes;
+      overtimeMinutes = overtimeCalc.overtimeMinutes;
+      doubleTimeMinutes = overtimeCalc.doubleTimeMinutes;
+      laborCost = overtimeCalc.laborCost;
+    }
+
+    // Update entry
+    const updatedEntry = await this.prisma.timeEntry.update({
+      where: { id: entryId },
+      data: {
+        clockInTime,
+        clockOutTime,
+        breakMinutes,
+        jobId: updateData.jobId !== undefined ? (updateData.jobId || null) : entry.jobId,
+        notes: updateData.notes !== undefined ? updateData.notes : entry.notes,
+        durationMinutes,
+        regularMinutes,
+        overtimeMinutes,
+        doubleTimeMinutes,
+        laborCost: laborCost ? new Decimal(laborCost) : null,
+        lastEditedById: editedById,
+        amendedAfterExport: isAmendedAfterExport || entry.amendedAfterExport || false,
+      },
+      include: { 
+        user: { select: { id: true, name: true, phone: true } }, 
+        job: true,
+        approvedBy: { select: { id: true, name: true } },
+      },
+    });
+
+    // Create audit log entry
+    await this.auditService.log({
+      companyId,
+      userId: editedById,
+      action: 'TIME_ENTRY_EDITED',
+      targetType: 'TIME_ENTRY',
+      targetId: entryId,
+      details: {
+        entryId,
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        oldValues: {
+          clockInTime: oldValues.clockInTime?.toISOString(),
+          clockOutTime: oldValues.clockOutTime?.toISOString(),
+          breakMinutes: oldValues.breakMinutes,
+          jobId: oldValues.jobId,
+          notes: oldValues.notes,
+        },
+        newValues: {
+          clockInTime: updatedEntry.clockInTime?.toISOString(),
+          clockOutTime: updatedEntry.clockOutTime?.toISOString(),
+          breakMinutes: updatedEntry.breakMinutes,
+          jobId: updatedEntry.jobId,
+          notes: updatedEntry.notes,
+        },
+        amendedAfterExport: isAmendedAfterExport,
+      },
+    });
+
+    return updatedEntry;
+  }
 }
+
