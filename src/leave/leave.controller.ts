@@ -12,7 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { LeaveService } from './leave.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { LeaveType } from '@prisma/client';
 
 @ApiTags('leave')
 @ApiBearerAuth()
@@ -37,7 +38,7 @@ export class LeaveController {
     @Request() req,
     @Body() body: {
       name: string;
-      type: string;
+      type: LeaveType;
       annualHours: number;
       accrualRate?: number;
       maxCarryover?: number;
@@ -117,3 +118,16 @@ export class LeaveController {
     return this.leaveService.getWorkersSummary(req.user.companyId);
   }
 }
+```
+
+---
+
+**Changes:**
+1. Fixed import path: `'../auth/guards/jwt-auth.guard'` (check your actual path - might be `'../auth/jwt-auth.guard'` or `'../auth/guards/jwt-auth.guard'`)
+2. Changed `type: string` to `type: LeaveType` and imported `LeaveType` from `@prisma/client`
+
+---
+
+**To find your actual JwtAuthGuard path, run:**
+```
+dir /s /b C:\Users\judex\OneDrive\Documents\TimeAttendance\time-attendance-platform\backend\src\*jwt*.ts
