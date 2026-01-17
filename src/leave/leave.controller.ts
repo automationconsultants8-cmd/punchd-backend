@@ -1,13 +1,23 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { LeaveService } from './leave.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { LeaveType } from '@prisma/client';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
-@ApiTags('Leave Management')
-@Controller('leave')
-@UseGuards(JwtAuthGuard)
+@ApiTags('leave')
 @ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
+@Controller('leave')
 export class LeaveController {
   constructor(private readonly leaveService: LeaveService) {}
 
@@ -17,53 +27,51 @@ export class LeaveController {
 
   @Get('policies')
   @ApiOperation({ summary: 'Get all leave policies for company' })
-  getPolicies(@Request() req) {
+  async getPolicies(@Request() req) {
     return this.leaveService.getPolicies(req.user.companyId);
   }
 
   @Post('policies')
   @ApiOperation({ summary: 'Create a new leave policy' })
-  createPolicy(
+  async createPolicy(
     @Request() req,
     @Body() body: {
-      leaveType: LeaveType;
       name: string;
-      hoursPerYear: number;
+      type: string;
+      annualHours: number;
       accrualRate?: number;
       maxCarryover?: number;
-      maxBalance?: number;
     },
   ) {
-    return this.leaveService.createPolicy(req.user.companyId, body);
+    return this.leaveService.createPolicy(req.user.companyId, req.user.userId, body);
   }
 
   @Patch('policies/:id')
   @ApiOperation({ summary: 'Update a leave policy' })
-  updatePolicy(
+  async updatePolicy(
     @Request() req,
     @Param('id') id: string,
     @Body() body: {
       name?: string;
-      hoursPerYear?: number;
+      annualHours?: number;
       accrualRate?: number;
       maxCarryover?: number;
-      maxBalance?: number;
       isActive?: boolean;
     },
   ) {
-    return this.leaveService.updatePolicy(req.user.companyId, id, body);
+    return this.leaveService.updatePolicy(id, req.user.companyId, req.user.userId, body);
   }
 
   @Delete('policies/:id')
   @ApiOperation({ summary: 'Delete a leave policy' })
-  deletePolicy(@Request() req, @Param('id') id: string) {
-    return this.leaveService.deletePolicy(req.user.companyId, id);
+  async deletePolicy(@Request() req, @Param('id') id: string) {
+    return this.leaveService.deletePolicy(id, req.user.companyId, req.user.userId);
   }
 
-  @Post('policies/:id/apply-all')
-  @ApiOperation({ summary: 'Apply policy to all active workers' })
-  applyPolicyToAll(@Request() req, @Param('id') id: string) {
-    return this.leaveService.applyPolicyToAllWorkers(req.user.companyId, id, req.user.userId);
+  @Post('policies/:id/apply-to-all')
+  @ApiOperation({ summary: 'Apply policy to all workers' })
+  async applyPolicyToAll(@Request() req, @Param('id') id: string) {
+    return this.leaveService.applyPolicyToAllWorkers(id, req.user.companyId, req.user.userId);
   }
 
   // ============================================
@@ -71,71 +79,41 @@ export class LeaveController {
   // ============================================
 
   @Get('balances')
-  @ApiOperation({ summary: 'Get all leave balances' })
-  getBalances(@Request() req, @Query('userId') userId?: string) {
-    return this.leaveService.getBalances(req.user.companyId, userId);
-  }
-
-  @Get('balances/summary')
-  @ApiOperation({ summary: 'Get workers summary with leave balances' })
-  getWorkersSummary(@Request() req) {
-    return this.leaveService.getWorkersSummary(req.user.companyId);
+  @ApiOperation({ summary: 'Get leave balances' })
+  async getBalances(
+    @Request() req,
+    @Query('userId') userId?: string,
+    @Query('policyId') policyId?: string,
+  ) {
+    return this.leaveService.getBalances(req.user.companyId, { userId, policyId });
   }
 
   @Get('balances/worker/:userId')
-  @ApiOperation({ summary: 'Get leave balances for a specific worker' })
-  getWorkerBalances(@Request() req, @Param('userId') userId: string) {
-    return this.leaveService.getWorkerBalances(req.user.companyId, userId);
+  @ApiOperation({ summary: 'Get balances for a specific worker' })
+  async getWorkerBalances(@Request() req, @Param('userId') userId: string) {
+    return this.leaveService.getWorkerBalances(userId, req.user.companyId);
   }
 
   @Patch('balances/:id')
   @ApiOperation({ summary: 'Update a leave balance' })
-  updateBalance(
+  async updateBalance(
     @Request() req,
     @Param('id') id: string,
     @Body() body: {
       totalHours?: number;
       usedHours?: number;
-      notes?: string;
     },
   ) {
-    return this.leaveService.updateBalance(req.user.companyId, id, req.user.userId, body);
-  }
-
-  @Post('balances/set')
-  @ApiOperation({ summary: 'Set leave balance for a worker (create or update)' })
-  setWorkerBalance(
-    @Request() req,
-    @Body() body: {
-      userId: string;
-      leaveType: LeaveType;
-      totalHours: number;
-      usedHours?: number;
-      notes?: string;
-    },
-  ) {
-    return this.leaveService.setWorkerBalance(
-      req.user.companyId,
-      body.userId,
-      body.leaveType,
-      req.user.userId,
-      body,
-    );
+    return this.leaveService.updateBalance(id, req.user.companyId, req.user.userId, body);
   }
 
   // ============================================
-  // BULK OPERATIONS
+  // SUMMARY
   // ============================================
 
-  @Post('bulk/apply-to-worker/:userId')
-  @ApiOperation({ summary: 'Apply all active policies to a worker' })
-  applyAllPoliciesToWorker(@Request() req, @Param('userId') userId: string) {
-    return this.leaveService.applyAllPoliciesToWorker(req.user.companyId, userId, req.user.userId);
-  }
-
-  @Post('bulk/apply-all')
-  @ApiOperation({ summary: 'Apply all policies to all workers' })
-  applyAllPoliciesToAllWorkers(@Request() req) {
-    return this.leaveService.applyAllPoliciesToAllWorkers(req.user.companyId, req.user.userId);
+  @Get('summary')
+  @ApiOperation({ summary: 'Get leave summary for all workers' })
+  async getWorkersSummary(@Request() req) {
+    return this.leaveService.getWorkersSummary(req.user.companyId);
   }
 }
