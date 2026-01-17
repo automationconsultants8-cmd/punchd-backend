@@ -53,6 +53,8 @@ model Company {
   managerLocationAssignments ManagerLocationAssignment[]
   managerWorkerAssignments   ManagerWorkerAssignment[]
   payPeriods            PayPeriod[]
+  leavePolicies         LeavePolicy[]
+  leaveBalances         LeaveBalance[]
 
   @@map("companies")
 }
@@ -123,6 +125,9 @@ model User {
   managedLocations        ManagerLocationAssignment[] @relation("ManagerLocations")
   managedWorkers          ManagerWorkerAssignment[]   @relation("ManagedWorkers")
   workerManagedBy         ManagerWorkerAssignment[]   @relation("WorkerManagers")
+  
+  // Leave balances
+  leaveBalances           LeaveBalance[]
 
   @@unique([companyId, phone])
   @@index([companyId, email])
@@ -712,6 +717,62 @@ model PushToken {
   @@map("push_tokens")
 }
 
+// ============================================
+// LEAVE MANAGEMENT
+// ============================================
+
+enum LeaveType {
+  SICK
+  VACATION
+  PTO
+  BEREAVEMENT
+  JURY_DUTY
+  CUSTOM
+}
+
+model LeavePolicy {
+  id              String    @id @default(uuid())
+  companyId       String
+  name            String
+  type            LeaveType
+  annualHours     Float
+  accrualRate     Float?    // hours per hours worked (e.g., 1/30 for CA sick leave)
+  maxCarryover    Float?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  balances        LeaveBalance[]
+
+  @@index([companyId])
+  @@map("leave_policies")
+}
+
+model LeaveBalance {
+  id              String      @id @default(uuid())
+  companyId       String
+  userId          String
+  policyId        String
+  totalHours      Float       @default(0)
+  usedHours       Float       @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  company         Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  policy          LeavePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, policyId])
+  @@index([companyId])
+  @@index([userId])
+  @@map("leave_balances")
+}
+
+// ============================================
+// AUDIT LOGGING
+// ============================================
+
 enum AuditAction {
   USER_CREATED
   USER_UPDATED
@@ -757,6 +818,11 @@ enum AuditAction {
   PAY_PERIOD_LOCKED
   PAY_PERIOD_UNLOCKED
   PAY_PERIOD_EXPORTED
+  LEAVE_POLICY_CREATED
+  LEAVE_POLICY_UPDATED
+  LEAVE_POLICY_DELETED
+  LEAVE_BALANCE_UPDATED
+  LEAVE_BALANCE_APPLIED_TO_ALL
 }
 
 model AuditLog {
@@ -777,3 +843,31 @@ model AuditLog {
   @@index([userId, createdAt])
   @@map("audit_logs")
 }
+```
+
+---
+
+**What I added:**
+
+1. **LeaveType enum** - SICK, VACATION, PTO, BEREAVEMENT, JURY_DUTY, CUSTOM
+
+2. **LeavePolicy model** - Company-level leave policies with annual hours, accrual rate, max carryover
+
+3. **LeaveBalance model** - Per-worker balances linked to policies (total hours, used hours)
+
+4. **Relations added to:**
+   - Company: `leavePolicies`, `leaveBalances`
+   - User: `leaveBalances`
+
+5. **New AuditActions:**
+   - LEAVE_POLICY_CREATED
+   - LEAVE_POLICY_UPDATED
+   - LEAVE_POLICY_DELETED
+   - LEAVE_BALANCE_UPDATED
+   - LEAVE_BALANCE_APPLIED_TO_ALL
+
+---
+
+**After replacing, run:**
+```
+cd C:\Users\judex\OneDrive\Documents\TimeAttendance\time-attendance-platform\backend && npx prisma db push --schema=prisma/schema.prisma
