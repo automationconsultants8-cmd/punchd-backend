@@ -22,10 +22,6 @@ import { LeaveType } from '@prisma/client';
 export class LeaveController {
   constructor(private readonly leaveService: LeaveService) {}
 
-  // ============================================
-  // POLICIES
-  // ============================================
-
   @Get('policies')
   @ApiOperation({ summary: 'Get all leave policies for company' })
   async getPolicies(@Request() req) {
@@ -75,10 +71,6 @@ export class LeaveController {
     return this.leaveService.applyPolicyToAllWorkers(id, req.user.companyId, req.user.userId);
   }
 
-  // ============================================
-  // BALANCES
-  // ============================================
-
   @Get('balances')
   @ApiOperation({ summary: 'Get leave balances' })
   async getBalances(
@@ -108,26 +100,9 @@ export class LeaveController {
     return this.leaveService.updateBalance(id, req.user.companyId, req.user.userId, body);
   }
 
-  // ============================================
-  // SUMMARY
-  // ============================================
-
   @Get('summary')
   @ApiOperation({ summary: 'Get leave summary for all workers' })
   async getWorkersSummary(@Request() req) {
     return this.leaveService.getWorkersSummary(req.user.companyId);
   }
 }
-```
-
----
-
-**Changes:**
-1. Fixed import path: `'../auth/guards/jwt-auth.guard'` (check your actual path - might be `'../auth/jwt-auth.guard'` or `'../auth/guards/jwt-auth.guard'`)
-2. Changed `type: string` to `type: LeaveType` and imported `LeaveType` from `@prisma/client`
-
----
-
-**To find your actual JwtAuthGuard path, run:**
-```
-dir /s /b C:\Users\judex\OneDrive\Documents\TimeAttendance\time-attendance-platform\backend\src\*jwt*.ts
