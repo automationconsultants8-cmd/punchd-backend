@@ -1,59 +1,64 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { LeaveType } from '@prisma/client';
-import { Decimal } from '@prisma/client/runtime/library';
 
 @Injectable()
 export class LeaveService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private auditService: AuditService,
+  ) {}
 
   // ============================================
-  // LEAVE POLICIES (Company Defaults)
+  // POLICIES
   // ============================================
 
   async getPolicies(companyId: string) {
     return this.prisma.leavePolicy.findMany({
       where: { companyId },
-      orderBy: { leaveType: 'asc' },
-    });
-  }
-
-  async createPolicy(companyId: string, data: {
-    leaveType: LeaveType;
-    name: string;
-    hoursPerYear: number;
-    accrualRate?: number;
-    maxCarryover?: number;
-    maxBalance?: number;
-  }) {
-    // Check if policy already exists for this leave type
-    const existing = await this.prisma.leavePolicy.findUnique({
-      where: { companyId_leaveType: { companyId, leaveType: data.leaveType } },
-    });
-
-    if (existing) {
-      throw new BadRequestException(`Policy for ${data.leaveType} already exists`);
-    }
-
-    return this.prisma.leavePolicy.create({
-      data: {
-        companyId,
-        leaveType: data.leaveType,
-        name: data.name,
-        hoursPerYear: new Decimal(data.hoursPerYear),
-        accrualRate: data.accrualRate ? new Decimal(data.accrualRate) : null,
-        maxCarryover: data.maxCarryover ? new Decimal(data.maxCarryover) : null,
-        maxBalance: data.maxBalance ? new Decimal(data.maxBalance) : null,
+      orderBy: { name: 'asc' },
+      include: {
+        _count: { select: { balances: true } },
       },
     });
   }
 
-  async updatePolicy(companyId: string, policyId: string, data: {
-    name?: string;
-    hoursPerYear?: number;
+  async createPolicy(companyId: string, userId: string, data: {
+    name: string;
+    type: LeaveType;
+    annualHours: number;
     accrualRate?: number;
     maxCarryover?: number;
-    maxBalance?: number;
+  }) {
+    const policy = await this.prisma.leavePolicy.create({
+      data: {
+        companyId,
+        name: data.name,
+        type: data.type,
+        annualHours: data.annualHours,
+        accrualRate: data.accrualRate ?? null,
+        maxCarryover: data.maxCarryover ?? null,
+      },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId,
+      action: 'LEAVE_POLICY_CREATED',
+      targetType: 'LEAVE_POLICY',
+      targetId: policy.id,
+      details: { name: data.name, type: data.type, annualHours: data.annualHours },
+    });
+
+    return policy;
+  }
+
+  async updatePolicy(policyId: string, companyId: string, userId: string, data: {
+    name?: string;
+    annualHours?: number;
+    accrualRate?: number;
+    maxCarryover?: number;
     isActive?: boolean;
   }) {
     const policy = await this.prisma.leavePolicy.findFirst({
@@ -64,20 +69,30 @@ export class LeaveService {
       throw new NotFoundException('Leave policy not found');
     }
 
-    return this.prisma.leavePolicy.update({
+    const updated = await this.prisma.leavePolicy.update({
       where: { id: policyId },
       data: {
         name: data.name,
-        hoursPerYear: data.hoursPerYear !== undefined ? new Decimal(data.hoursPerYear) : undefined,
-        accrualRate: data.accrualRate !== undefined ? new Decimal(data.accrualRate) : undefined,
-        maxCarryover: data.maxCarryover !== undefined ? new Decimal(data.maxCarryover) : undefined,
-        maxBalance: data.maxBalance !== undefined ? new Decimal(data.maxBalance) : undefined,
+        annualHours: data.annualHours,
+        accrualRate: data.accrualRate,
+        maxCarryover: data.maxCarryover,
         isActive: data.isActive,
       },
     });
+
+    await this.auditService.log({
+      companyId,
+      userId,
+      action: 'LEAVE_POLICY_UPDATED',
+      targetType: 'LEAVE_POLICY',
+      targetId: policyId,
+      details: { changes: data },
+    });
+
+    return updated;
   }
 
-  async deletePolicy(companyId: string, policyId: string) {
+  async deletePolicy(policyId: string, companyId: string, userId: string) {
     const policy = await this.prisma.leavePolicy.findFirst({
       where: { id: policyId, companyId },
     });
@@ -86,92 +101,106 @@ export class LeaveService {
       throw new NotFoundException('Leave policy not found');
     }
 
-    return this.prisma.leavePolicy.delete({
+    // Delete associated balances first
+    await this.prisma.leaveBalance.deleteMany({
+      where: { policyId },
+    });
+
+    await this.prisma.leavePolicy.delete({
       where: { id: policyId },
     });
+
+    await this.auditService.log({
+      companyId,
+      userId,
+      action: 'LEAVE_POLICY_DELETED',
+      targetType: 'LEAVE_POLICY',
+      targetId: policyId,
+      details: { name: policy.name, type: policy.type },
+    });
+
+    return { success: true };
   }
 
   // ============================================
-  // LEAVE BALANCES (Per Worker)
+  // BALANCES
   // ============================================
 
-  async getBalances(companyId: string, userId?: string) {
+  async getBalances(companyId: string, filters?: { userId?: string; policyId?: string }) {
     const where: any = { companyId };
-    if (userId) {
-      where.userId = userId;
+    
+    if (filters?.userId) {
+      where.userId = filters.userId;
+    }
+    if (filters?.policyId) {
+      where.policyId = filters.policyId;
     }
 
     return this.prisma.leaveBalance.findMany({
       where,
       include: {
         user: { select: { id: true, name: true, phone: true } },
+        policy: { select: { id: true, name: true, type: true, annualHours: true } },
       },
-      orderBy: [{ user: { name: 'asc' } }, { leaveType: 'asc' }],
+      orderBy: [{ user: { name: 'asc' } }],
     });
   }
 
-  async getWorkerBalances(companyId: string, userId: string) {
+  async getWorkerBalances(userId: string, companyId: string) {
     return this.prisma.leaveBalance.findMany({
-      where: { companyId, userId },
-      orderBy: { leaveType: 'asc' },
+      where: { userId, companyId },
+      include: {
+        policy: { select: { id: true, name: true, type: true, annualHours: true } },
+      },
     });
   }
 
-  async updateBalance(companyId: string, balanceId: string, updatedById: string, data: {
+  async updateBalance(balanceId: string, companyId: string, userId: string, data: {
     totalHours?: number;
     usedHours?: number;
-    notes?: string;
   }) {
     const balance = await this.prisma.leaveBalance.findFirst({
       where: { id: balanceId, companyId },
+      include: { user: true, policy: true },
     });
 
     if (!balance) {
       throw new NotFoundException('Leave balance not found');
     }
 
-    return this.prisma.leaveBalance.update({
+    const updated = await this.prisma.leaveBalance.update({
       where: { id: balanceId },
       data: {
-        totalHours: data.totalHours !== undefined ? new Decimal(data.totalHours) : undefined,
-        usedHours: data.usedHours !== undefined ? new Decimal(data.usedHours) : undefined,
-        notes: data.notes,
-        lastUpdatedById: updatedById,
+        totalHours: data.totalHours,
+        usedHours: data.usedHours,
+      },
+      include: {
+        user: { select: { id: true, name: true } },
+        policy: { select: { id: true, name: true, type: true } },
       },
     });
-  }
 
-  async setWorkerBalance(companyId: string, userId: string, leaveType: LeaveType, updatedById: string, data: {
-    totalHours: number;
-    usedHours?: number;
-    notes?: string;
-  }) {
-    // Upsert - create or update
-    return this.prisma.leaveBalance.upsert({
-      where: { userId_leaveType: { userId, leaveType } },
-      create: {
-        companyId,
-        userId,
-        leaveType,
-        totalHours: new Decimal(data.totalHours),
-        usedHours: new Decimal(data.usedHours || 0),
-        notes: data.notes,
-        lastUpdatedById: updatedById,
-      },
-      update: {
-        totalHours: new Decimal(data.totalHours),
-        usedHours: data.usedHours !== undefined ? new Decimal(data.usedHours) : undefined,
-        notes: data.notes,
-        lastUpdatedById: updatedById,
+    await this.auditService.log({
+      companyId,
+      userId,
+      action: 'LEAVE_BALANCE_UPDATED',
+      targetType: 'LEAVE_BALANCE',
+      targetId: balanceId,
+      details: {
+        workerName: balance.user.name,
+        policyName: balance.policy.name,
+        changes: data,
       },
     });
+
+    return updated;
   }
 
   // ============================================
-  // BULK OPERATIONS
+  // APPLY TO ALL WORKERS
   // ============================================
 
-  async applyPolicyToAllWorkers(companyId: string, policyId: string, updatedById: string) {
+  async applyPolicyToAllWorkers(policyId: string, companyId: string, updatedById: string) {
     const policy = await this.prisma.leavePolicy.findFirst({
       where: { id: policyId, companyId },
     });
@@ -180,132 +209,85 @@ export class LeaveService {
       throw new NotFoundException('Leave policy not found');
     }
 
-    // Get all active workers
+    // Get all active workers in the company
     const workers = await this.prisma.user.findMany({
-      where: { companyId, isActive: true },
-      select: { id: true },
-    });
-
-    const results = { created: 0, updated: 0, errors: [] as string[] };
-
-    for (const worker of workers) {
-      try {
-        await this.prisma.leaveBalance.upsert({
-          where: { userId_leaveType: { userId: worker.id, leaveType: policy.leaveType } },
-          create: {
-            companyId,
-            userId: worker.id,
-            leaveType: policy.leaveType,
-            totalHours: policy.hoursPerYear,
-            usedHours: new Decimal(0),
-            lastUpdatedById: updatedById,
-          },
-          update: {
-            totalHours: policy.hoursPerYear,
-            lastUpdatedById: updatedById,
-          },
-        });
-        results.created++;
-      } catch (err) {
-        results.errors.push(`Worker ${worker.id}: ${err.message}`);
-      }
-    }
-
-    return results;
-  }
-
-  async applyAllPoliciesToWorker(companyId: string, userId: string, updatedById: string) {
-    const policies = await this.prisma.leavePolicy.findMany({
-      where: { companyId, isActive: true },
-    });
-
-    const results = { created: 0, errors: [] as string[] };
-
-    for (const policy of policies) {
-      try {
-        await this.prisma.leaveBalance.upsert({
-          where: { userId_leaveType: { userId, leaveType: policy.leaveType } },
-          create: {
-            companyId,
-            userId,
-            leaveType: policy.leaveType,
-            totalHours: policy.hoursPerYear,
-            usedHours: new Decimal(0),
-            lastUpdatedById: updatedById,
-          },
-          update: {
-            totalHours: policy.hoursPerYear,
-            lastUpdatedById: updatedById,
-          },
-        });
-        results.created++;
-      } catch (err) {
-        results.errors.push(`Policy ${policy.leaveType}: ${err.message}`);
-      }
-    }
-
-    return results;
-  }
-
-  async applyAllPoliciesToAllWorkers(companyId: string, updatedById: string) {
-    const policies = await this.prisma.leavePolicy.findMany({
-      where: { companyId, isActive: true },
-    });
-
-    const workers = await this.prisma.user.findMany({
-      where: { companyId, isActive: true },
-      select: { id: true },
+      where: { companyId, isActive: true, role: 'WORKER' },
+      select: { id: true, name: true },
     });
 
     let created = 0;
+    let updated = 0;
     const errors: string[] = [];
 
     for (const worker of workers) {
-      for (const policy of policies) {
-        try {
-          await this.prisma.leaveBalance.upsert({
-            where: { userId_leaveType: { userId: worker.id, leaveType: policy.leaveType } },
-            create: {
+      try {
+        // Check if balance already exists
+        const existing = await this.prisma.leaveBalance.findUnique({
+          where: { userId_policyId: { userId: worker.id, policyId } },
+        });
+
+        if (existing) {
+          // Update existing balance
+          await this.prisma.leaveBalance.update({
+            where: { id: existing.id },
+            data: { totalHours: policy.annualHours },
+          });
+          updated++;
+        } else {
+          // Create new balance
+          await this.prisma.leaveBalance.create({
+            data: {
               companyId,
               userId: worker.id,
-              leaveType: policy.leaveType,
-              totalHours: policy.hoursPerYear,
-              usedHours: new Decimal(0),
-              lastUpdatedById: updatedById,
-            },
-            update: {
-              totalHours: policy.hoursPerYear,
-              lastUpdatedById: updatedById,
+              policyId,
+              totalHours: policy.annualHours,
+              usedHours: 0,
             },
           });
           created++;
-        } catch (err) {
-          errors.push(`Worker ${worker.id} / ${policy.leaveType}: ${err.message}`);
         }
+      } catch (err) {
+        errors.push(`Worker ${worker.name}: ${err.message}`);
       }
     }
 
-    return { created, workers: workers.length, policies: policies.length, errors };
+    await this.auditService.log({
+      companyId,
+      userId: updatedById,
+      action: 'LEAVE_BALANCE_APPLIED_TO_ALL',
+      targetType: 'LEAVE_POLICY',
+      targetId: policyId,
+      details: {
+        policyName: policy.name,
+        workersCreated: created,
+        workersUpdated: updated,
+        errors,
+      },
+    });
+
+    return {
+      success: true,
+      created,
+      updated,
+      total: workers.length,
+      errors,
+    };
   }
 
   // ============================================
-  // SUMMARY FOR DISPLAY
+  // SUMMARY FOR WORKERS PAGE
   // ============================================
 
   async getWorkersSummary(companyId: string) {
-    // Get all workers with their balances
     const workers = await this.prisma.user.findMany({
-      where: { companyId, isActive: true },
+      where: { companyId, isActive: true, role: 'WORKER' },
       select: {
         id: true,
         name: true,
         phone: true,
         leaveBalances: {
-          select: {
-            leaveType: true,
-            totalHours: true,
-            usedHours: true,
-            pendingHours: true,
+          include: {
+            policy: { select: { name: true, type: true } },
           },
         },
       },
@@ -317,14 +299,14 @@ export class LeaveService {
       name: worker.name,
       phone: worker.phone,
       balances: worker.leaveBalances.reduce((acc, bal) => {
-        acc[bal.leaveType] = {
-          total: Number(bal.totalHours),
-          used: Number(bal.usedHours),
-          pending: Number(bal.pendingHours),
-          available: Number(bal.totalHours) - Number(bal.usedHours) - Number(bal.pendingHours),
+        acc[bal.policy.type] = {
+          policyName: bal.policy.name,
+          total: bal.totalHours,
+          used: bal.usedHours,
+          available: bal.totalHours - bal.usedHours,
         };
         return acc;
-      }, {} as Record<string, { total: number; used: number; pending: number; available: number }>),
+      }, {} as Record<string, any>),
     }));
   }
 }
