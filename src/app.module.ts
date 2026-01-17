@@ -53,6 +53,7 @@ import { LeaveModule } from './leave/leave.module';
     MessagesModule,
     RoleManagementModule,
     PayPeriodsModule,
+    LeaveModule,
   ],
 })
 export class AppModule {}
