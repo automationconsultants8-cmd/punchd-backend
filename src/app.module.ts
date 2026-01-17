@@ -22,6 +22,7 @@ import { MessagesModule } from './messages/messages.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { RoleManagementModule } from './role-management/role-management.module';
 import { PayPeriodsModule } from './pay-periods/pay-periods.module';
+import { LeaveModule } from './leave/leave.module';
 
 
 @Module({
