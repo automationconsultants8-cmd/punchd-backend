@@ -843,31 +843,3 @@ model AuditLog {
   @@index([userId, createdAt])
   @@map("audit_logs")
 }
-```
-
----
-
-**What I added:**
-
-1. **LeaveType enum** - SICK, VACATION, PTO, BEREAVEMENT, JURY_DUTY, CUSTOM
-
-2. **LeavePolicy model** - Company-level leave policies with annual hours, accrual rate, max carryover
-
-3. **LeaveBalance model** - Per-worker balances linked to policies (total hours, used hours)
-
-4. **Relations added to:**
-   - Company: `leavePolicies`, `leaveBalances`
-   - User: `leaveBalances`
-
-5. **New AuditActions:**
-   - LEAVE_POLICY_CREATED
-   - LEAVE_POLICY_UPDATED
-   - LEAVE_POLICY_DELETED
-   - LEAVE_BALANCE_UPDATED
-   - LEAVE_BALANCE_APPLIED_TO_ALL
-
----
-
-**After replacing, run:**
-```
-cd C:\Users\judex\OneDrive\Documents\TimeAttendance\time-attendance-platform\backend && npx prisma db push --schema=prisma/schema.prisma
