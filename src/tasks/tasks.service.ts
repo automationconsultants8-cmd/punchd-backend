@@ -66,7 +66,7 @@ export class TasksService {
           // Log audit
           await this.auditService.log({
             companyId: company.id,
-            userId: null,
+            userId: undefined,
             action: 'TIME_ENTRY_EDITED',
             targetType: 'TIME_ENTRY',
             targetId: entry.id,
