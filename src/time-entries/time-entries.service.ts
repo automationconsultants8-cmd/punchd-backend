@@ -513,15 +513,7 @@ export class TimeEntriesService {
       },
     });
   }
-```
 
-**What I added:**
-1. Inside `calculateOvertimeForEntry`: Gets company overtime settings and checks for 7th consecutive day
-2. New method `check7thConsecutiveDay`: Counts consecutive work days in the week
-
-The rest of your file after `endBreak` stays exactly the same. Build and push:
-```
-cd C:\Users\judex\OneDrive\Documents\TimeAttendance\time-attendance-platform\backend && npm run build && git add . && git commit -m "Add 7th consecutive day CA overtime rule" && git push
   async getTimeEntries(companyId: string, filters?: any) {
     const where: any = {};
 
