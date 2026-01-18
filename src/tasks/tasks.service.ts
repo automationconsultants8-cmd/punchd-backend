@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { getToggles } from '../common/feature-toggles';
 
 @Injectable()
 export class TasksService {
@@ -17,18 +18,22 @@ export class TasksService {
     this.logger.log('Running auto clock-out check...');
 
     try {
-      // Get all companies with their settings
       const companies = await this.prisma.company.findMany({
         where: { isActive: true },
         select: { id: true, settings: true },
       });
 
       for (const company of companies) {
-        const settings = (company.settings as any) || {};
-        const maxShiftHours = settings.maxShiftHours || 16; // Default 16 hours
+        const toggles = getToggles(company.settings || {});
+
+        // Skip if auto clock-out is disabled
+        if (!toggles.autoClockOut) {
+          continue;
+        }
+
+        const maxShiftHours = toggles.maxShiftHours;
         const maxShiftMinutes = maxShiftHours * 60;
 
-        // Find open time entries that exceed max shift time
         const cutoffTime = new Date();
         cutoffTime.setHours(cutoffTime.getHours() - maxShiftHours);
 
@@ -45,11 +50,9 @@ export class TasksService {
         });
 
         for (const entry of overdueEntries) {
-          // Calculate clock out time (max hours after clock in)
           const autoClockOutTime = new Date(entry.clockInTime);
           autoClockOutTime.setMinutes(autoClockOutTime.getMinutes() + maxShiftMinutes);
 
-          // Auto clock out
           await this.prisma.timeEntry.update({
             where: { id: entry.id },
             data: {
@@ -57,13 +60,13 @@ export class TasksService {
               durationMinutes: maxShiftMinutes,
               isFlagged: true,
               flagReason: `Auto clock-out: Exceeded ${maxShiftHours} hour maximum shift time`,
-              notes: entry.notes 
+              approvalStatus: 'PENDING',
+              notes: entry.notes
                 ? `${entry.notes} | AUTO CLOCK-OUT: Worker did not clock out, auto-clocked after ${maxShiftHours} hours`
                 : `AUTO CLOCK-OUT: Worker did not clock out, auto-clocked after ${maxShiftHours} hours`,
             },
           });
 
-          // Log audit
           await this.auditService.log({
             companyId: company.id,
             userId: undefined,
@@ -96,7 +99,6 @@ export class TasksService {
     }
   }
 
-  // Run at midnight to clean up any stragglers
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async handleMidnightCleanup() {
     this.logger.log('Running midnight cleanup...');
