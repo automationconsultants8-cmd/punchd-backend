@@ -346,37 +346,63 @@ export class TimeEntriesService {
     let overtimeMinutes = 0;
     let doubleTimeMinutes = 0;
 
-    const dailyRegularLimit = 8 * 60;
-    const dailyOvertimeLimit = 12 * 60;
+    // Get company overtime settings
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { overtimeSettings: true },
+    });
 
-    if (totalDailyMinutes > dailyOvertimeLimit) {
-      const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
-      doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
-      
-      const remainingWork = workMinutes - doubleTimeMinutes;
-      if (previousDailyMinutes < dailyOvertimeLimit) {
-        const otMinutesInRange = Math.min(dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit), remainingWork);
-        overtimeMinutes = Math.max(0, otMinutesInRange);
-        regularMinutes = remainingWork - overtimeMinutes;
-      } else {
+    const otSettings = (company?.overtimeSettings as any) || {};
+    const dailyRegularLimit = otSettings.dailyOtThreshold ?? 480; // 8 hours in minutes
+    const dailyOvertimeLimit = otSettings.dailyDtThreshold ?? 720; // 12 hours in minutes
+    const otMultiplier = otSettings.otMultiplier ?? 1.5;
+    const dtMultiplier = otSettings.dtMultiplier ?? 2.0;
+
+    // Check for 7th consecutive day (California rule)
+    const is7thConsecutiveDay = await this.check7thConsecutiveDay(userId, companyId, clockInTime);
+
+    if (is7thConsecutiveDay) {
+      // 7th consecutive day: ALL hours are OT, hours over 8 are DT
+      if (totalDailyMinutes > dailyRegularLimit) {
+        const dtMinutes = totalDailyMinutes - dailyRegularLimit;
+        doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
+        overtimeMinutes = workMinutes - doubleTimeMinutes;
         regularMinutes = 0;
-        overtimeMinutes = remainingWork;
-      }
-    } else if (totalDailyMinutes > dailyRegularLimit) {
-      if (previousDailyMinutes >= dailyRegularLimit) {
+      } else {
         overtimeMinutes = workMinutes;
         regularMinutes = 0;
-      } else {
-        regularMinutes = Math.max(0, dailyRegularLimit - previousDailyMinutes);
-        overtimeMinutes = workMinutes - regularMinutes;
+      }
+    } else {
+      // Normal daily OT calculation
+      if (totalDailyMinutes > dailyOvertimeLimit) {
+        const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
+        doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
+        
+        const remainingWork = workMinutes - doubleTimeMinutes;
+        if (previousDailyMinutes < dailyOvertimeLimit) {
+          const otMinutesInRange = Math.min(dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit), remainingWork);
+          overtimeMinutes = Math.max(0, otMinutesInRange);
+          regularMinutes = remainingWork - overtimeMinutes;
+        } else {
+          regularMinutes = 0;
+          overtimeMinutes = remainingWork;
+        }
+      } else if (totalDailyMinutes > dailyRegularLimit) {
+        if (previousDailyMinutes >= dailyRegularLimit) {
+          overtimeMinutes = workMinutes;
+          regularMinutes = 0;
+        } else {
+          regularMinutes = Math.max(0, dailyRegularLimit - previousDailyMinutes);
+          overtimeMinutes = workMinutes - regularMinutes;
+        }
       }
     }
 
     let laborCost: number | null = null;
     if (hourlyRate) {
       const regularPay = (regularMinutes / 60) * hourlyRate;
-      const overtimePay = (overtimeMinutes / 60) * hourlyRate * 1.5;
-      const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * 2;
+      const overtimePay = (overtimeMinutes / 60) * hourlyRate * otMultiplier;
+      const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * dtMultiplier;
       laborCost = regularPay + overtimePay + doubleTimePay;
     }
 
@@ -387,6 +413,47 @@ export class TimeEntriesService {
       hourlyRate,
       laborCost,
     };
+  }
+
+  // Helper method to check if today is the 7th consecutive work day
+  private async check7thConsecutiveDay(
+    userId: string,
+    companyId: string,
+    clockInTime: Date,
+  ): Promise<boolean> {
+    const currentDay = new Date(clockInTime);
+    currentDay.setHours(0, 0, 0, 0);
+    
+    const dayOfWeek = currentDay.getDay(); // 0 = Sunday
+    const weekStart = new Date(currentDay);
+    weekStart.setDate(weekStart.getDate() - dayOfWeek);
+
+    // Count consecutive days worked this week before today
+    let consecutiveDays = 0;
+    
+    for (let i = 0; i < dayOfWeek; i++) {
+      const checkDate = new Date(weekStart);
+      checkDate.setDate(checkDate.getDate() + i);
+      const checkDateEnd = new Date(checkDate);
+      checkDateEnd.setHours(23, 59, 59, 999);
+
+      const workedThatDay = await this.prisma.timeEntry.findFirst({
+        where: {
+          userId,
+          companyId,
+          clockInTime: { gte: checkDate, lte: checkDateEnd },
+          durationMinutes: { gt: 0 },
+        },
+      });
+
+      if (workedThatDay) {
+        consecutiveDays++;
+      } else {
+        consecutiveDays = 0;
+      }
+    }
+
+    return consecutiveDays >= 6;
   }
 
   async startBreak(userId: string) {
@@ -446,7 +513,15 @@ export class TimeEntriesService {
       },
     });
   }
+```
 
+**What I added:**
+1. Inside `calculateOvertimeForEntry`: Gets company overtime settings and checks for 7th consecutive day
+2. New method `check7thConsecutiveDay`: Counts consecutive work days in the week
+
+The rest of your file after `endBreak` stays exactly the same. Build and push:
+```
+cd C:\Users\judex\OneDrive\Documents\TimeAttendance\time-attendance-platform\backend && npm run build && git add . && git commit -m "Add 7th consecutive day CA overtime rule" && git push
   async getTimeEntries(companyId: string, filters?: any) {
     const where: any = {};
 
