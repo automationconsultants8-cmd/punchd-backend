@@ -22,24 +22,75 @@ export class TimeEntriesService {
     private breakComplianceService: BreakComplianceService,
   ) {}
 
-  async clockIn(userId: string, companyId: string, dto: ClockInDto) {
-    const activeEntry = await this.prisma.timeEntry.findFirst({
-      where: { userId, companyId, clockOutTime: null },
-    });
+async clockIn(userId: string, companyId: string, dto: ClockInDto) {
+  const activeEntry = await this.prisma.timeEntry.findFirst({
+    where: { userId, companyId, clockOutTime: null },
+  });
 
-    if (activeEntry) {
-      throw new BadRequestException('You are already clocked in. Please clock out first.');
+  if (activeEntry) {
+    throw new BadRequestException('You are already clocked in. Please clock out first.');
+  }
+
+  // Get company with settings
+  const company = await this.prisma.company.findUnique({
+    where: { id: companyId },
+    select: { settings: true },
+  });
+
+  const { getToggles, isInLearningMode } = await import('../common/feature-toggles');
+  const toggles = getToggles(company?.settings || {});
+  const learningMode = isInLearningMode(toggles);
+
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+  });
+
+  let jobName = 'Unknown';
+  const flagReasons: string[] = [];
+  let jobId: string | null = null;
+
+  // Job-based tracking check
+  if (dto.entryType === 'JOB_TIME') {
+    if (!toggles.jobBasedTracking) {
+      throw new BadRequestException('Job-based tracking is disabled for this company.');
     }
 
-    // Early clock-in restriction check
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: { settings: true },
-    });
+    if (!dto.jobId) {
+      throw new BadRequestException('Job ID is required for job time entries');
+    }
 
-    const settings = (company?.settings as any) || {};
-    const earlyClockInMinutes = settings.earlyClockInMinutes ?? 15;
+    const job = await this.jobsService.findOne(companyId, dto.jobId);
+    jobName = job.name;
 
+    // GPS Geofencing check
+    if (toggles.gpsGeofencing !== 'off') {
+      const [jobLat, jobLng] = job.geofenceCenter.split(',').map(Number);
+
+      const geofenceCheck = this.jobsService.isWithinGeofence(
+        jobLat,
+        jobLng,
+        job.geofenceRadiusMeters,
+        dto.latitude,
+        dto.longitude,
+      );
+
+      if (!geofenceCheck.isWithin) {
+        if (toggles.gpsGeofencing === 'strict') {
+          throw new ForbiddenException(
+            `Clock-in denied: You are ${geofenceCheck.distance}m from the job site. Must be within ${job.geofenceRadiusMeters}m.`,
+          );
+        } else {
+          // Soft mode - flag but allow
+          flagReasons.push(`GPS_OUTSIDE_GEOFENCE: ${geofenceCheck.distance}m from job site`);
+        }
+      }
+    }
+
+    jobId = dto.jobId;
+  }
+
+  // Early clock-in restriction check
+  if (toggles.earlyClockInRestriction !== 'off' && toggles.shiftScheduling) {
     const now = new Date();
     const todayStart = new Date(now);
     todayStart.setHours(0, 0, 0, 0);
@@ -58,133 +109,109 @@ export class TimeEntriesService {
 
     if (todayShift) {
       const shiftStartTime = new Date(todayShift.startTime);
-      const earliestClockIn = new Date(shiftStartTime.getTime() - (earlyClockInMinutes * 60 * 1000));
+      const earliestClockIn = new Date(shiftStartTime.getTime() - (toggles.earlyClockInMinutes * 60 * 1000));
 
       if (now < earliestClockIn) {
         const minutesUntilAllowed = Math.ceil((earliestClockIn.getTime() - now.getTime()) / 1000 / 60);
         const shiftTimeStr = shiftStartTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        throw new ForbiddenException(
-          `You cannot clock in yet. Your shift starts at ${shiftTimeStr}. You can clock in ${earlyClockInMinutes} minutes before your shift (in ${minutesUntilAllowed} minutes).`
-        );
-      }
-    }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    let jobName = 'Unknown';
-    const flagReasons: string[] = [];
-    let jobId: string | null = null;
-
-    if (dto.entryType === 'JOB_TIME') {
-      if (!dto.jobId) {
-        throw new BadRequestException('Job ID is required for job time entries');
-      }
-
-      const job = await this.jobsService.findOne(companyId, dto.jobId);
-      jobName = job.name;
-      const [jobLat, jobLng] = job.geofenceCenter.split(',').map(Number);
-
-      const geofenceCheck = this.jobsService.isWithinGeofence(
-        jobLat,
-        jobLng,
-        job.geofenceRadiusMeters,
-        dto.latitude,
-        dto.longitude,
-      );
-
-      if (!geofenceCheck.isWithin) {
-        throw new ForbiddenException(
-          `Clock-in denied: You are ${geofenceCheck.distance}m from the job site. Must be within ${job.geofenceRadiusMeters}m.`,
-        );
-      }
-
-      jobId = dto.jobId;
-    }
-
-    // Skip S3 upload - photos verified locally but not stored
-    const photoUrl = 'verified-locally';
-
-    // Create the time entry first
-    const timeEntry = await this.prisma.timeEntry.create({
-      data: {
-        companyId,
-        userId,
-        jobId,
-        clockInTime: new Date(),
-        clockInLocation: `${dto.latitude},${dto.longitude}`,
-        clockInPhotoUrl: photoUrl,
-        isFlagged: flagReasons.length > 0,
-        flagReason: flagReasons.length > 0 ? flagReasons.join(', ') : null,
-        approvalStatus: flagReasons.length > 0 ? 'PENDING' : 'APPROVED',
-      },
-      include: {
-        job: true,
-        user: { select: { id: true, name: true, phone: true } },
-      },
-    });
-
-    // Face verification
-    if (dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
-      // Check if user has a reference photo
-      if (!user?.referencePhotoUrl) {
-        // First clock-in - store this photo as reference
-        console.log(`First clock-in for user ${userId}, storing reference photo`);
-        await this.prisma.user.update({
-          where: { id: userId },
-          data: { referencePhotoUrl: dto.photoUrl },
-        });
-        // No comparison needed for first clock-in
-      } else {
-        // Compare against stored reference
-        try {
-          const confidence = await this.awsService.compareFaces(
-            user.referencePhotoUrl,
-            dto.photoUrl,
+        if (toggles.earlyClockInRestriction === 'strict') {
+          throw new ForbiddenException(
+            `You cannot clock in yet. Your shift starts at ${shiftTimeStr}. You can clock in ${toggles.earlyClockInMinutes} minutes before your shift (in ${minutesUntilAllowed} minutes).`
           );
+        } else {
+          // Soft mode - flag but allow
+          flagReasons.push(`EARLY_CLOCK_IN: ${minutesUntilAllowed} minutes before allowed time`);
+        }
+      }
+    }
+  }
 
-          const matched = confidence >= 92;
+  // Photo capture check
+  const photoUrl = toggles.photoCapture ? 'verified-locally' : null;
 
-          await this.prisma.faceVerificationLog.create({
-            data: {
-              companyId,
-              userId,
-              timeEntryId: timeEntry.id,
-              submittedPhotoUrl: 'verified-locally',
-              confidenceScore: confidence,
-              matched,
-              rekognitionResponse: { confidence, matched },
-            },
-          });
+  // Create the time entry
+  const timeEntry = await this.prisma.timeEntry.create({
+    data: {
+      companyId,
+      userId,
+      jobId,
+      clockInTime: new Date(),
+      clockInLocation: `${dto.latitude},${dto.longitude}`,
+      clockInPhotoUrl: photoUrl,
+      isFlagged: flagReasons.length > 0,
+      flagReason: flagReasons.length > 0 ? flagReasons.join(', ') : null,
+      approvalStatus: flagReasons.length > 0 ? 'PENDING' : 'APPROVED',
+    },
+    include: {
+      job: true,
+      user: { select: { id: true, name: true, phone: true } },
+    },
+  });
 
-          if (!matched) {
+  // Face verification (only if enabled)
+  if (toggles.facialRecognition !== 'off' && toggles.photoCapture && dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
+    if (!user?.referencePhotoUrl) {
+      // First clock-in - store reference photo
+      console.log(`First clock-in for user ${userId}, storing reference photo`);
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { referencePhotoUrl: dto.photoUrl },
+      });
+    } else {
+      // Compare faces
+      try {
+        const confidence = await this.awsService.compareFaces(
+          user.referencePhotoUrl,
+          dto.photoUrl,
+        );
+
+        const matched = confidence >= 92;
+
+        await this.prisma.faceVerificationLog.create({
+          data: {
+            companyId,
+            userId,
+            timeEntryId: timeEntry.id,
+            submittedPhotoUrl: 'verified-locally',
+            confidenceScore: confidence,
+            matched,
+            rekognitionResponse: { confidence, matched },
+          },
+        });
+
+        if (!matched) {
+          if (toggles.facialRecognition === 'strict') {
+            // Strict mode - delete entry and block
             await this.prisma.timeEntry.delete({
               where: { id: timeEntry.id },
             });
 
-            const admins = await this.prisma.user.findMany({
-              where: {
-                companyId,
-                role: { in: ['ADMIN', 'OWNER'] },
-                email: { not: null },
-              },
-              select: { email: true },
-            });
+            // Send buddy punch alert (if enabled)
+            if (toggles.buddyPunchAlerts && !learningMode) {
+              const admins = await this.prisma.user.findMany({
+                where: {
+                  companyId,
+                  role: { in: ['ADMIN', 'OWNER'] },
+                  email: { not: null },
+                },
+                select: { email: true },
+              });
 
-            for (const admin of admins) {
-              if (admin.email) {
-                try {
-                  await this.emailService.sendBuddyPunchAlert(
-                    admin.email,
-                    user.name,
-                    user.phone,
-                    jobName,
-                    confidence,
-                    'photo-not-stored',
-                  );
-                } catch (emailErr) {
-                  console.error('Failed to send buddy punch alert:', emailErr);
+              for (const admin of admins) {
+                if (admin.email) {
+                  try {
+                    await this.emailService.sendBuddyPunchAlert(
+                      admin.email,
+                      user.name,
+                      user.phone,
+                      jobName,
+                      confidence,
+                      'photo-not-stored',
+                    );
+                  } catch (emailErr) {
+                    console.error('Failed to send buddy punch alert:', emailErr);
+                  }
                 }
               }
             }
@@ -192,27 +219,69 @@ export class TimeEntriesService {
             throw new ForbiddenException(
               `Face verification failed. Confidence: ${confidence.toFixed(1)}%. Please try again or contact your supervisor.`,
             );
-          }
-        } catch (err) {
-          if (err instanceof ForbiddenException) {
-            throw err;
-          }
+          } else {
+            // Soft mode - flag but allow
+            await this.prisma.timeEntry.update({
+              where: { id: timeEntry.id },
+              data: {
+                isFlagged: true,
+                flagReason: timeEntry.flagReason 
+                  ? `${timeEntry.flagReason}, FACE_MISMATCH: ${confidence.toFixed(1)}%`
+                  : `FACE_MISMATCH: ${confidence.toFixed(1)}%`,
+                approvalStatus: 'PENDING',
+              },
+            });
 
-          console.error('Face verification error:', err);
-          await this.prisma.timeEntry.update({
-            where: { id: timeEntry.id },
-            data: {
-              isFlagged: true,
-              flagReason: 'FACE_VERIFICATION_ERROR',
-              approvalStatus: 'PENDING',
-            },
-          });
+            // Send buddy punch alert (if enabled and not in learning mode)
+            if (toggles.buddyPunchAlerts && !learningMode) {
+              const admins = await this.prisma.user.findMany({
+                where: {
+                  companyId,
+                  role: { in: ['ADMIN', 'OWNER'] },
+                  email: { not: null },
+                },
+                select: { email: true },
+              });
+
+              for (const admin of admins) {
+                if (admin.email) {
+                  try {
+                    await this.emailService.sendBuddyPunchAlert(
+                      admin.email,
+                      user.name,
+                      user.phone,
+                      jobName,
+                      confidence,
+                      'photo-not-stored',
+                    );
+                  } catch (emailErr) {
+                    console.error('Failed to send buddy punch alert:', emailErr);
+                  }
+                }
+              }
+            }
+          }
         }
+      } catch (err) {
+        if (err instanceof ForbiddenException) {
+          throw err;
+        }
+
+        console.error('Face verification error:', err);
+        await this.prisma.timeEntry.update({
+          where: { id: timeEntry.id },
+          data: {
+            isFlagged: true,
+            flagReason: 'FACE_VERIFICATION_ERROR',
+            approvalStatus: 'PENDING',
+          },
+        });
       }
     }
-
-    return timeEntry;
   }
+
+  return timeEntry;
+}
 
   async clockOut(userId: string, companyId: string, dto: ClockOutDto) {
     const activeEntry = await this.prisma.timeEntry.findFirst({
