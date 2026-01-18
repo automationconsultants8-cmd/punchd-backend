@@ -59,6 +59,13 @@ model Company {
   @@map("companies")
 }
 
+enum WorkerType {
+  HOURLY
+  SALARIED
+  CONTRACTOR
+  VOLUNTEER
+}
+
 
 enum UserRole {
   WORKER
@@ -80,6 +87,7 @@ model User {
   phone               String
   name                String
   role                UserRole       @default(WORKER)
+  workerType          WorkerType     @default(HOURLY)
   referencePhotoUrl   String?
   rekognitionFaceId   String?
   isActive            Boolean        @default(true)
