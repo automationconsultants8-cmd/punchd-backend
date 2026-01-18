@@ -284,65 +284,96 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
 }
 
   async clockOut(userId: string, companyId: string, dto: ClockOutDto) {
-    const activeEntry = await this.prisma.timeEntry.findFirst({
-      where: { userId, companyId, clockOutTime: null },
-      include: { job: true },
-    });
+  const activeEntry = await this.prisma.timeEntry.findFirst({
+    where: { userId, companyId, clockOutTime: null },
+    include: { job: true },
+  });
 
-    if (!activeEntry) {
-      throw new BadRequestException('No active clock-in found. Please clock in first.');
-    }
+  if (!activeEntry) {
+    throw new BadRequestException('No active clock-in found. Please clock in first.');
+  }
 
-    if (activeEntry.isOnBreak) {
-      throw new BadRequestException('You are currently on break. Please end your break before clocking out.');
-    }
+  if (activeEntry.isOnBreak) {
+    throw new BadRequestException('You are currently on break. Please end your break before clocking out.');
+  }
 
-    const clockInTime = new Date(activeEntry.clockInTime);
-    const clockOutTime = new Date();
-    const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
-    const workMinutes = totalMinutes - (activeEntry.breakMinutes || 0);
+  // Get company settings
+  const company = await this.prisma.company.findUnique({
+    where: { id: companyId },
+    select: { settings: true },
+  });
 
-    // Skip S3 upload - photos verified locally but not stored
-    const photoUrl = 'verified-locally';
+  const { getToggles } = await import('../common/feature-toggles');
+  const toggles = getToggles(company?.settings || {});
 
-    const overtimeCalc = await this.calculateOvertimeForEntry(
+  const clockInTime = new Date(activeEntry.clockInTime);
+  const clockOutTime = new Date();
+  const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
+  const workMinutes = totalMinutes - (activeEntry.breakMinutes || 0);
+
+  const photoUrl = toggles.photoCapture ? 'verified-locally' : null;
+
+  // Calculate overtime (if enabled)
+  let overtimeCalc = {
+    regularMinutes: workMinutes,
+    overtimeMinutes: 0,
+    doubleTimeMinutes: 0,
+    hourlyRate: null as number | null,
+    laborCost: null as number | null,
+  };
+
+  if (toggles.overtimeCalculations) {
+    overtimeCalc = await this.calculateOvertimeForEntry(
       userId,
       companyId,
       activeEntry.jobId,
       clockInTime,
       workMinutes,
+      toggles,
     );
-
-    const updatedEntry = await this.prisma.timeEntry.update({
-      where: { id: activeEntry.id },
-      data: {
-        clockOutTime,
-        clockOutLocation: `${dto.latitude},${dto.longitude}`,
-        clockOutPhotoUrl: photoUrl,
-        durationMinutes: workMinutes,
-        regularMinutes: overtimeCalc.regularMinutes,
-        overtimeMinutes: overtimeCalc.overtimeMinutes,
-        doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
-        hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
-        laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
-      },
-      include: {
-        job: true,
-        user: { select: { id: true, name: true, phone: true } },
-      },
+  } else {
+    // Just get hourly rate without OT calc
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { hourlyRate: true },
     });
+    if (user?.hourlyRate) {
+      overtimeCalc.hourlyRate = Number(user.hourlyRate);
+      overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
+    }
+  }
 
-    // Check break compliance on clock out
+  const updatedEntry = await this.prisma.timeEntry.update({
+    where: { id: activeEntry.id },
+    data: {
+      clockOutTime,
+      clockOutLocation: `${dto.latitude},${dto.longitude}`,
+      clockOutPhotoUrl: photoUrl,
+      durationMinutes: workMinutes,
+      regularMinutes: overtimeCalc.regularMinutes,
+      overtimeMinutes: overtimeCalc.overtimeMinutes,
+      doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
+      hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
+      laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
+    },
+    include: {
+      job: true,
+      user: { select: { id: true, name: true, phone: true } },
+    },
+  });
+
+  // Check break compliance (if enabled)
+  if (toggles.breakTracking) {
     try {
       const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
       const complianceResult = this.breakComplianceService.checkCompliance(
         workMinutes,
         activeEntry.breakMinutes || 0,
-        0, // rest break count
+        0,
         breakSettings,
       );
 
-      if (!complianceResult.isCompliant) {
+      if (!complianceResult.isCompliant && toggles.breakCompliancePenalties) {
         await this.breakComplianceService.recordViolations(
           companyId,
           userId,
@@ -354,176 +385,180 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
     } catch (err) {
       console.error('Break compliance check error:', err);
     }
-
-    return updatedEntry;
   }
 
-  private async calculateOvertimeForEntry(
-    userId: string,
-    companyId: string,
-    jobId: string | null,
-    clockInTime: Date,
-    workMinutes: number,
-  ) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { hourlyRate: true },
+  return updatedEntry;
+}
+
+private async calculateOvertimeForEntry(
+  userId: string,
+  companyId: string,
+  jobId: string | null,
+  clockInTime: Date,
+  workMinutes: number,
+  toggles?: any,
+) {
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+    select: { hourlyRate: true },
+  });
+
+  let hourlyRate: number | null = null;
+
+  if (jobId) {
+    const jobRate = await this.prisma.workerJobRate.findFirst({
+      where: { userId, jobId },
     });
-
-    let hourlyRate: number | null = null;
-
-    if (jobId) {
-      const jobRate = await this.prisma.workerJobRate.findFirst({
-        where: { userId, jobId },
+    if (jobRate) {
+      hourlyRate = Number(jobRate.hourlyRate);
+    } else {
+      const job = await this.prisma.job.findUnique({
+        where: { id: jobId },
+        select: { defaultHourlyRate: true },
       });
-      if (jobRate) {
-        hourlyRate = Number(jobRate.hourlyRate);
-      } else {
-        const job = await this.prisma.job.findUnique({
-          where: { id: jobId },
-          select: { defaultHourlyRate: true },
-        });
-        if (job?.defaultHourlyRate) {
-          hourlyRate = Number(job.defaultHourlyRate);
-        }
+      if (job?.defaultHourlyRate) {
+        hourlyRate = Number(job.defaultHourlyRate);
       }
     }
+  }
 
-    if (!hourlyRate && user?.hourlyRate) {
-      hourlyRate = Number(user.hourlyRate);
+  if (!hourlyRate && user?.hourlyRate) {
+    hourlyRate = Number(user.hourlyRate);
+  }
+
+  const dayStart = new Date(clockInTime);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(clockInTime);
+  dayEnd.setHours(23, 59, 59, 999);
+
+  const dailyEntries = await this.prisma.timeEntry.findMany({
+    where: {
+      userId,
+      companyId,
+      clockInTime: { gte: dayStart, lte: dayEnd },
+      clockOutTime: { not: null },
+    },
+    select: { durationMinutes: true },
+  });
+
+  const previousDailyMinutes = dailyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+  const totalDailyMinutes = previousDailyMinutes + workMinutes;
+
+  let regularMinutes = workMinutes;
+  let overtimeMinutes = 0;
+  let doubleTimeMinutes = 0;
+
+  // Get company overtime settings
+  const company = await this.prisma.company.findUnique({
+    where: { id: companyId },
+    select: { overtimeSettings: true },
+  });
+
+  const otSettings = (company?.overtimeSettings as any) || {};
+  const dailyRegularLimit = otSettings.dailyOtThreshold ?? 480;
+  const dailyOvertimeLimit = otSettings.dailyDtThreshold ?? 720;
+  const otMultiplier = otSettings.otMultiplier ?? 1.5;
+  const dtMultiplier = otSettings.dtMultiplier ?? 2.0;
+
+  // Check for 7th consecutive day (only if toggle is on)
+  let is7thConsecutiveDay = false;
+  if (toggles?.seventhDayOtRule) {
+    is7thConsecutiveDay = await this.check7thConsecutiveDay(userId, companyId, clockInTime);
+  }
+
+  if (is7thConsecutiveDay) {
+    // 7th consecutive day: ALL hours are OT, hours over 8 are DT
+    if (totalDailyMinutes > dailyRegularLimit) {
+      const dtMinutes = totalDailyMinutes - dailyRegularLimit;
+      doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
+      overtimeMinutes = workMinutes - doubleTimeMinutes;
+      regularMinutes = 0;
+    } else {
+      overtimeMinutes = workMinutes;
+      regularMinutes = 0;
     }
+  } else {
+    // Normal daily OT calculation
+    if (totalDailyMinutes > dailyOvertimeLimit) {
+      const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
+      doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
 
-    const dayStart = new Date(clockInTime);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(clockInTime);
-    dayEnd.setHours(23, 59, 59, 999);
+      const remainingWork = workMinutes - doubleTimeMinutes;
+      if (previousDailyMinutes < dailyOvertimeLimit) {
+        const otMinutesInRange = Math.min(dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit), remainingWork);
+        overtimeMinutes = Math.max(0, otMinutesInRange);
+        regularMinutes = remainingWork - overtimeMinutes;
+      } else {
+        regularMinutes = 0;
+        overtimeMinutes = remainingWork;
+      }
+    } else if (totalDailyMinutes > dailyRegularLimit) {
+      if (previousDailyMinutes >= dailyRegularLimit) {
+        overtimeMinutes = workMinutes;
+        regularMinutes = 0;
+      } else {
+        regularMinutes = Math.max(0, dailyRegularLimit - previousDailyMinutes);
+        overtimeMinutes = workMinutes - regularMinutes;
+      }
+    }
+  }
 
-    const dailyEntries = await this.prisma.timeEntry.findMany({
+  let laborCost: number | null = null;
+  if (hourlyRate) {
+    const regularPay = (regularMinutes / 60) * hourlyRate;
+    const overtimePay = (overtimeMinutes / 60) * hourlyRate * otMultiplier;
+    const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * dtMultiplier;
+    laborCost = regularPay + overtimePay + doubleTimePay;
+  }
+
+  return {
+    regularMinutes,
+    overtimeMinutes,
+    doubleTimeMinutes,
+    hourlyRate,
+    laborCost,
+  };
+}
+
+// Helper method for 7th consecutive day check
+private async check7thConsecutiveDay(
+  userId: string,
+  companyId: string,
+  clockInTime: Date,
+): Promise<boolean> {
+  const currentDay = new Date(clockInTime);
+  currentDay.setHours(0, 0, 0, 0);
+
+  const dayOfWeek = currentDay.getDay();
+  const weekStart = new Date(currentDay);
+  weekStart.setDate(weekStart.getDate() - dayOfWeek);
+
+  let consecutiveDays = 0;
+
+  for (let i = 0; i < dayOfWeek; i++) {
+    const checkDate = new Date(weekStart);
+    checkDate.setDate(checkDate.getDate() + i);
+    const checkDateEnd = new Date(checkDate);
+    checkDateEnd.setHours(23, 59, 59, 999);
+
+    const workedThatDay = await this.prisma.timeEntry.findFirst({
       where: {
         userId,
         companyId,
-        clockInTime: { gte: dayStart, lte: dayEnd },
-        clockOutTime: { not: null },
+        clockInTime: { gte: checkDate, lte: checkDateEnd },
+        durationMinutes: { gt: 0 },
       },
-      select: { durationMinutes: true },
     });
 
-    const previousDailyMinutes = dailyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
-    const totalDailyMinutes = previousDailyMinutes + workMinutes;
-
-    let regularMinutes = workMinutes;
-    let overtimeMinutes = 0;
-    let doubleTimeMinutes = 0;
-
-    // Get company overtime settings
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: { overtimeSettings: true },
-    });
-
-    const otSettings = (company?.overtimeSettings as any) || {};
-    const dailyRegularLimit = otSettings.dailyOtThreshold ?? 480; // 8 hours in minutes
-    const dailyOvertimeLimit = otSettings.dailyDtThreshold ?? 720; // 12 hours in minutes
-    const otMultiplier = otSettings.otMultiplier ?? 1.5;
-    const dtMultiplier = otSettings.dtMultiplier ?? 2.0;
-
-    // Check for 7th consecutive day (California rule)
-    const is7thConsecutiveDay = await this.check7thConsecutiveDay(userId, companyId, clockInTime);
-
-    if (is7thConsecutiveDay) {
-      // 7th consecutive day: ALL hours are OT, hours over 8 are DT
-      if (totalDailyMinutes > dailyRegularLimit) {
-        const dtMinutes = totalDailyMinutes - dailyRegularLimit;
-        doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
-        overtimeMinutes = workMinutes - doubleTimeMinutes;
-        regularMinutes = 0;
-      } else {
-        overtimeMinutes = workMinutes;
-        regularMinutes = 0;
-      }
+    if (workedThatDay) {
+      consecutiveDays++;
     } else {
-      // Normal daily OT calculation
-      if (totalDailyMinutes > dailyOvertimeLimit) {
-        const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
-        doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
-        
-        const remainingWork = workMinutes - doubleTimeMinutes;
-        if (previousDailyMinutes < dailyOvertimeLimit) {
-          const otMinutesInRange = Math.min(dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit), remainingWork);
-          overtimeMinutes = Math.max(0, otMinutesInRange);
-          regularMinutes = remainingWork - overtimeMinutes;
-        } else {
-          regularMinutes = 0;
-          overtimeMinutes = remainingWork;
-        }
-      } else if (totalDailyMinutes > dailyRegularLimit) {
-        if (previousDailyMinutes >= dailyRegularLimit) {
-          overtimeMinutes = workMinutes;
-          regularMinutes = 0;
-        } else {
-          regularMinutes = Math.max(0, dailyRegularLimit - previousDailyMinutes);
-          overtimeMinutes = workMinutes - regularMinutes;
-        }
-      }
+      consecutiveDays = 0;
     }
-
-    let laborCost: number | null = null;
-    if (hourlyRate) {
-      const regularPay = (regularMinutes / 60) * hourlyRate;
-      const overtimePay = (overtimeMinutes / 60) * hourlyRate * otMultiplier;
-      const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * dtMultiplier;
-      laborCost = regularPay + overtimePay + doubleTimePay;
-    }
-
-    return {
-      regularMinutes,
-      overtimeMinutes,
-      doubleTimeMinutes,
-      hourlyRate,
-      laborCost,
-    };
   }
 
-  // Helper method to check if today is the 7th consecutive work day
-  private async check7thConsecutiveDay(
-    userId: string,
-    companyId: string,
-    clockInTime: Date,
-  ): Promise<boolean> {
-    const currentDay = new Date(clockInTime);
-    currentDay.setHours(0, 0, 0, 0);
-    
-    const dayOfWeek = currentDay.getDay(); // 0 = Sunday
-    const weekStart = new Date(currentDay);
-    weekStart.setDate(weekStart.getDate() - dayOfWeek);
-
-    // Count consecutive days worked this week before today
-    let consecutiveDays = 0;
-    
-    for (let i = 0; i < dayOfWeek; i++) {
-      const checkDate = new Date(weekStart);
-      checkDate.setDate(checkDate.getDate() + i);
-      const checkDateEnd = new Date(checkDate);
-      checkDateEnd.setHours(23, 59, 59, 999);
-
-      const workedThatDay = await this.prisma.timeEntry.findFirst({
-        where: {
-          userId,
-          companyId,
-          clockInTime: { gte: checkDate, lte: checkDateEnd },
-          durationMinutes: { gt: 0 },
-        },
-      });
-
-      if (workedThatDay) {
-        consecutiveDays++;
-      } else {
-        consecutiveDays = 0;
-      }
-    }
-
-    return consecutiveDays >= 6;
-  }
+  return consecutiveDays >= 6;
+}
 
   async startBreak(userId: string) {
     const activeEntry = await this.prisma.timeEntry.findFirst({
