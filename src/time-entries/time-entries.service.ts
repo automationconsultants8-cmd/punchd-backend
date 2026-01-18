@@ -31,6 +31,44 @@ export class TimeEntriesService {
       throw new BadRequestException('You are already clocked in. Please clock out first.');
     }
 
+    // Early clock-in restriction check
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { settings: true },
+    });
+
+    const settings = (company?.settings as any) || {};
+    const earlyClockInMinutes = settings.earlyClockInMinutes ?? 15;
+
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const todayShift = await this.prisma.shift.findFirst({
+      where: {
+        userId,
+        companyId,
+        shiftDate: { gte: todayStart, lte: todayEnd },
+        status: { notIn: ['CANCELLED', 'COMPLETED'] },
+      },
+      orderBy: { startTime: 'asc' },
+    });
+
+    if (todayShift) {
+      const shiftStartTime = new Date(todayShift.startTime);
+      const earliestClockIn = new Date(shiftStartTime.getTime() - (earlyClockInMinutes * 60 * 1000));
+
+      if (now < earliestClockIn) {
+        const minutesUntilAllowed = Math.ceil((earliestClockIn.getTime() - now.getTime()) / 1000 / 60);
+        const shiftTimeStr = shiftStartTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        throw new ForbiddenException(
+          `You cannot clock in yet. Your shift starts at ${shiftTimeStr}. You can clock in ${earlyClockInMinutes} minutes before your shift (in ${minutesUntilAllowed} minutes).`
+        );
+      }
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
