@@ -49,6 +49,7 @@ export class UsersService {
         phone: formattedPhone,
         email: dto.email,
         role: (dto.role as any) || 'WORKER',
+        workerType: (dto.workerType as any) || 'HOURLY',
         referencePhotoUrl: referencePhotoUrl || undefined,
         hourlyRate: dto.hourlyRate ? new Decimal(dto.hourlyRate) : null,
         address: dto.address || null,
@@ -228,6 +229,7 @@ export class UsersService {
     if (dto.name !== undefined) updateData.name = dto.name;
     if (dto.email !== undefined) updateData.email = dto.email;
     if (dto.role !== undefined) updateData.role = dto.role as any;
+    if (dto.workerType !== undefined) updateData.workerType = dto.workerType as any;
     if (dto.isActive !== undefined) updateData.isActive = dto.isActive;
     if (dto.approvalStatus !== undefined) updateData.approvalStatus = dto.approvalStatus;
     if (formattedPhone) updateData.phone = formattedPhone;
