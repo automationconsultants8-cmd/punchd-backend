@@ -22,6 +22,11 @@ export class UpdateUserDto {
   @IsOptional()
   role?: string;
 
+  @ApiPropertyOptional({ enum: ['HOURLY', 'SALARIED', 'CONTRACTOR', 'VOLUNTEER'] })
+  @IsEnum(['HOURLY', 'SALARIED', 'CONTRACTOR', 'VOLUNTEER'])
+  @IsOptional()
+  workerType?: string;
+
   @ApiPropertyOptional()
   @IsBoolean()
   @IsOptional()
