@@ -23,4 +23,9 @@ export class ClockInDto {
   @IsString()
   @IsOptional()
   photoUrl?: string;
+
+  @ApiPropertyOptional({ enum: ['HOURLY', 'SALARIED', 'CONTRACTOR', 'VOLUNTEER'] })
+  @IsEnum(['HOURLY', 'SALARIED', 'CONTRACTOR', 'VOLUNTEER'])
+  @IsOptional()
+  workerType?: string;
 }
