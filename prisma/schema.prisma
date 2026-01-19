@@ -87,7 +87,7 @@ model User {
   phone               String
   name                String
   role                UserRole       @default(WORKER)
-  workerType          WorkerType     @default(HOURLY)
+  workerTypes         WorkerType[]   @default([HOURLY])
   referencePhotoUrl   String?
   rekognitionFaceId   String?
   isActive            Boolean        @default(true)
