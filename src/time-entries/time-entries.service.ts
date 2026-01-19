@@ -142,6 +142,7 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
       isFlagged: flagReasons.length > 0,
       flagReason: flagReasons.length > 0 ? flagReasons.join(', ') : null,
       approvalStatus: flagReasons.length > 0 ? 'PENDING' : 'APPROVED',
+      workerType: dto.workerType as any,
     },
     include: {
       job: true,
