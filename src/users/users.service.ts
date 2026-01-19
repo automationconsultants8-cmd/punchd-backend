@@ -43,19 +43,12 @@ export class UsersService {
       }
     }
 
-    // Hash password if provided
-    let hashedPassword: string | undefined = undefined;
-    if (dto.password) {
-      hashedPassword = await bcrypt.hash(dto.password, 10);
-    }
-
     const user = await this.prisma.user.create({
       data: {
         companyId,
         name: dto.name,
         phone: formattedPhone,
         email: dto.email,
-        password: hashedPassword,
         role: (dto.role as any) || 'WORKER',
         workerTypes: dto.workerTypes?.length ? (dto.workerTypes as any) : ['HOURLY'],
         referencePhotoUrl: referencePhotoUrl || undefined,
@@ -248,16 +241,16 @@ export class UsersService {
 
     // Hash and update password if provided
     if (dto.password) {
-      updateData.password = await bcrypt.hash(dto.password, 10);
+      updateData.passwordHash = await bcrypt.hash(dto.password, 10);
       changes.push('password updated');
       
       await this.auditService.log({
         companyId,
         userId: performedBy,
-        action: 'USER_PASSWORD_CHANGED',
+        action: 'USER_UPDATED',
         targetType: 'USER',
         targetId: userId,
-        details: { userName: user.name },
+        details: { userName: user.name, passwordChanged: true },
       });
     }
 
