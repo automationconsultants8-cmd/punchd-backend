@@ -1,6 +1,5 @@
-import { IsString, IsEmail, IsOptional, IsEnum, IsNumber } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsEnum, IsBoolean, IsNumber, IsArray } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsEnum, IsNumber, IsArray } from 'class-validator';
 
 export class CreateUserDto {
   @ApiProperty()
