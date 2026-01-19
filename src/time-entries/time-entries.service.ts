@@ -297,50 +297,38 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
     throw new BadRequestException('You are currently on break. Please end your break before clocking out.');
   }
 
-  // Get company settings
-  const company = await this.prisma.company.findUnique({
-    where: { id: companyId },
-    select: { settings: true },
+  // Get user with workerType
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+    select: { workerType: true, hourlyRate: true },
   });
 
-  const { getToggles } = await import('../common/feature-toggles');
-  const toggles = getToggles(company?.settings || {});
+  const isHourly = !user?.workerType || user.workerType === 'HOURLY';
 
   const clockInTime = new Date(activeEntry.clockInTime);
   const clockOutTime = new Date();
   const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
   const workMinutes = totalMinutes - (activeEntry.breakMinutes || 0);
 
-  const photoUrl = toggles.photoCapture ? 'verified-locally' : null;
+  const photoUrl = 'verified-locally';
 
-  // Calculate overtime (if enabled)
   let overtimeCalc = {
     regularMinutes: workMinutes,
     overtimeMinutes: 0,
     doubleTimeMinutes: 0,
-    hourlyRate: null as number | null,
+    hourlyRate: user?.hourlyRate ? Number(user.hourlyRate) : null,
     laborCost: null as number | null,
   };
 
-  if (toggles.overtimeCalculations) {
+  // Only calculate OT for hourly workers
+  if (isHourly) {
     overtimeCalc = await this.calculateOvertimeForEntry(
       userId,
       companyId,
       activeEntry.jobId,
       clockInTime,
       workMinutes,
-      toggles,
     );
-  } else {
-    // Just get hourly rate without OT calc
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { hourlyRate: true },
-    });
-    if (user?.hourlyRate) {
-      overtimeCalc.hourlyRate = Number(user.hourlyRate);
-      overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
-    }
   }
 
   const updatedEntry = await this.prisma.timeEntry.update({
@@ -362,8 +350,8 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
     },
   });
 
-  // Check break compliance (if enabled)
-  if (toggles.breakTracking) {
+  // Only check break compliance for hourly workers
+  if (isHourly) {
     try {
       const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
       const complianceResult = this.breakComplianceService.checkCompliance(
@@ -373,7 +361,7 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
         breakSettings,
       );
 
-      if (!complianceResult.isCompliant && toggles.breakCompliancePenalties) {
+      if (!complianceResult.isCompliant) {
         await this.breakComplianceService.recordViolations(
           companyId,
           userId,
@@ -389,7 +377,7 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
 
   return updatedEntry;
 }
-
+  
 private async calculateOvertimeForEntry(
   userId: string,
   companyId: string,
