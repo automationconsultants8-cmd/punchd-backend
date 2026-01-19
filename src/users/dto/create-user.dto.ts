@@ -20,11 +20,12 @@ export class CreateUserDto {
   @IsOptional()
   role?: string;
 
-  @ApiPropertyOptional({ enum: ['HOURLY', 'SALARIED', 'CONTRACTOR', 'VOLUNTEER'] })
-  @IsEnum(['HOURLY', 'SALARIED', 'CONTRACTOR', 'VOLUNTEER'])
+  @ApiPropertyOptional({ type: [String], enum: ['HOURLY', 'SALARIED', 'CONTRACTOR', 'VOLUNTEER'] })
+  @IsArray()
+  @IsEnum(['HOURLY', 'SALARIED', 'CONTRACTOR', 'VOLUNTEER'], { each: true })
   @IsOptional()
-  workerType?: string;
-
+  workerTypes?: string[];
+  
   @ApiPropertyOptional()
   @IsString()
   @IsOptional()
