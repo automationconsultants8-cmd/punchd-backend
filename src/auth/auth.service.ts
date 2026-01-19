@@ -157,9 +157,10 @@ export class AuthService {
         name: user.name,
         phone: user.phone,
         role: user.role,
+        workerTypes: user.workerTypes,
         companyId: user.companyId,
         approvalStatus: user.approvalStatus,
-      } : undefined,
+} : undefined,
     };
   }
 
@@ -512,14 +513,15 @@ export class AuthService {
     return {
       accessToken,
       user: {
-        id: user.id,
-        name: user.name,
-        phone: user.phone,
-        role: user.role,
-        companyId: user.companyId,
-        companyName: user.company.name,
-      },
-    };
+       id: user.id,
+       name: user.name,
+       phone: user.phone,
+       role: user.role,
+       workerTypes: user.workerTypes,
+       companyId: user.companyId,
+       companyName: user.company.name,
+  },
+};
   }
 
   async verifyOTPAndLogin(phone: string, code: string): Promise<{ accessToken: string; user: any }> {
