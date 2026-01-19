@@ -300,10 +300,10 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
   // Get user with workerType
   const user = await this.prisma.user.findUnique({
     where: { id: userId },
-    select: { workerType: true, hourlyRate: true },
+    select: { workerTypes: true, hourlyRate: true },
   });
 
-  const isHourly = !user?.workerType || user.workerType === 'HOURLY';
+  const isHourly = !user?.workerTypes?.length || user.workerTypes.includes('HOURLY');
 
   const clockInTime = new Date(activeEntry.clockInTime);
   const clockOutTime = new Date();
