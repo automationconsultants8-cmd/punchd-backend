@@ -40,6 +40,12 @@ export class AuthController {
     return this.authService.login(body.phone);
   }
 
+  @Post('contractor-login')
+  @ApiOperation({ summary: 'Contractor login with email and password' })
+  async contractorLogin(@Body() loginDto: { email: string; password: string }) {
+  return this.authService.contractorLogin(loginDto.email, loginDto.password);
+}
+
   @Post('verify-otp-and-login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify OTP and login in one step (Mobile - Workers)' })
