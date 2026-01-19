@@ -232,6 +232,58 @@ export class AuthService {
 
     console.log(`🔐 Dashboard login: ${user.name} (${user.role}) - ${user.email}`);
 
+    // ============================================
+  // CONTRACTOR LOGIN (Contractor Portal)
+  // ============================================
+
+  async contractorLogin(email: string, password: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { 
+        email: email.toLowerCase().trim(),
+        isActive: true,
+      },
+      include: { company: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    if (!user.passwordHash) {
+      throw new UnauthorizedException('Password not set. Contact your administrator.');
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    if (!user.workerTypes.includes('CONTRACTOR')) {
+      throw new UnauthorizedException('Access denied. This portal is for contractors only.');
+    }
+
+    const payload = {
+      sub: user.id,
+      companyId: user.companyId,
+      role: user.role,
+      userId: user.id,
+    };
+
+    return {
+      access_token: this.jwtService.sign(payload),
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        workerTypes: user.workerTypes,
+        companyId: user.companyId,
+        companyName: user.company.name,
+      },
+    };
+  }
+
     // Build response based on role
     const response: any = {
       accessToken,
