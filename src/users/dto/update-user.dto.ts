@@ -1,6 +1,5 @@
-import { IsString, IsEmail, IsOptional, IsEnum, IsBoolean, IsNumber, IsArray } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsEnum, IsBoolean, IsNumber, IsArray, MinLength } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-
 
 export class UpdateUserDto {
   @ApiPropertyOptional()
@@ -17,6 +16,12 @@ export class UpdateUserDto {
   @IsEmail()
   @IsOptional()
   email?: string;
+
+  @ApiPropertyOptional({ description: 'Password for portal/app login' })
+  @IsString()
+  @MinLength(6)
+  @IsOptional()
+  password?: string;
 
   @ApiPropertyOptional({ enum: ['WORKER', 'MANAGER', 'ADMIN', 'OWNER'] })
   @IsEnum(['WORKER', 'MANAGER', 'ADMIN', 'OWNER'])
