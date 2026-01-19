@@ -33,6 +33,22 @@ export class TimeEntriesController {
     return this.timeEntriesService.getCurrentStatus(req.user.userId, req.user.companyId);
   }
 
+  @Get('mine')
+@ApiOperation({ summary: 'Get current user time entries' })
+@ApiQuery({ name: 'startDate', required: false, type: String })
+@ApiQuery({ name: 'endDate', required: false, type: String })
+getMyTimeEntries(
+  @Request() req,
+  @Query('startDate') startDate?: string,
+  @Query('endDate') endDate?: string,
+) {
+  return this.timeEntriesService.getTimeEntries(req.user.companyId, {
+    userId: req.user.userId,
+    startDate: startDate ? new Date(startDate) : undefined,
+    endDate: endDate ? new Date(endDate) : undefined,
+  });
+}
+
   @Post('start-break')
   @ApiOperation({ summary: 'Start a break' })
   startBreak(@Request() req) {
