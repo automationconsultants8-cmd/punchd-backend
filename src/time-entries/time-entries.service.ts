@@ -141,7 +141,7 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
       clockInPhotoUrl: photoUrl,
       isFlagged: flagReasons.length > 0,
       flagReason: flagReasons.length > 0 ? flagReasons.join(', ') : null,
-      approvalStatus: flagReasons.length > 0 ? 'PENDING' : 'APPROVED',
+      approvalStatus: (flagReasons.length > 0 || dto.workerType === 'CONTRACTOR') ? 'PENDING' : 'APPROVED',
       workerType: dto.workerType as any,
     },
     include: {
