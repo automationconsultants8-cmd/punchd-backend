@@ -69,4 +69,9 @@ export class TimesheetsController {
   review(@Request() req, @Param('id') id: string, @Body() dto: ReviewTimesheetDto) {
     return this.timesheetsService.review(id, req.user.userId, req.user.companyId, dto);
   }
+  @Delete(':id')
+@ApiOperation({ summary: 'Delete a draft timesheet' })
+delete(@Request() req, @Param('id') id: string) {
+  return this.timesheetsService.delete(id, req.user.userId, req.user.companyId);
+}
 }
