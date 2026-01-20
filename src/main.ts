@@ -28,6 +28,7 @@ async function bootstrap() {
       'https://app.gopunchd.com',
       'https://gopunchd.com',
       'https://portal.gopunchd.com'
+      'https://volunteer.gopunchd.com'
     ],
     credentials: true,
   });
