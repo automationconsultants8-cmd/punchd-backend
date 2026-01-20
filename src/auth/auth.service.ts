@@ -675,4 +675,113 @@ export class AuthService {
 
     return response;
   }
+  // ============================================
+// VOLUNTEER AUTH (Phone + SMS Code)
+// ============================================
+
+async sendVolunteerCode(phone: string): Promise<{ success: boolean; expiresIn: number }> {
+  // Format phone number
+  const formattedPhone = '+1' + phone.replace(/\D/g, '');
+  
+  // Check if volunteer exists
+  const user = await this.prisma.user.findFirst({
+    where: { 
+      phone: { in: [phone, formattedPhone, phone.replace(/\D/g, '')] },
+      workerTypes: { has: 'VOLUNTEER' },
+      isActive: true,
+    },
+  });
+
+  if (!user) {
+    throw new BadRequestException('No volunteer account found with this phone number. Please contact your organization.');
+  }
+
+  // Use existing OTP logic
+  return this.sendOTP(formattedPhone);
+}
+
+async verifyVolunteerCode(phone: string, code: string): Promise<{ access_token: string; user: any }> {
+  const formattedPhone = '+1' + phone.replace(/\D/g, '');
+  
+  // Verify the code
+  let verified = false;
+
+  // Try Twilio Verify first
+  if (this.twilioClient && this.verifyServiceSid) {
+    try {
+      const verificationCheck = await this.twilioClient.verify.v2
+        .services(this.verifyServiceSid)
+        .verificationChecks.create({
+          to: formattedPhone,
+          code: code,
+        });
+      verified = verificationCheck.status === 'approved';
+    } catch (error) {
+      console.error('Twilio verification failed:', error.message);
+    }
+  }
+
+  // Fall back to database OTP
+  if (!verified) {
+    const otpRecord = await this.prisma.otpCode.findFirst({
+      where: {
+        phone: formattedPhone,
+        code,
+        verified: false,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (otpRecord) {
+      await this.prisma.otpCode.update({
+        where: { id: otpRecord.id },
+        data: { verified: true },
+      });
+      verified = true;
+    }
+  }
+
+  if (!verified) {
+    throw new UnauthorizedException('Invalid or expired code');
+  }
+
+  // Find volunteer
+  const user = await this.prisma.user.findFirst({
+    where: { 
+      phone: { in: [phone, formattedPhone, phone.replace(/\D/g, '')] },
+      workerTypes: { has: 'VOLUNTEER' },
+      isActive: true,
+    },
+    include: { company: true },
+  });
+
+  if (!user) {
+    throw new BadRequestException('Volunteer account not found');
+  }
+
+  const payload = {
+    sub: user.id,
+    userId: user.id,
+    companyId: user.companyId,
+    role: user.role,
+    workerType: 'VOLUNTEER',
+  };
+
+  console.log(`🔐 Volunteer login: ${user.name} - ${user.phone}`);
+
+  return {
+    access_token: this.jwtService.sign(payload),
+    user: {
+      id: user.id,
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      role: user.role,
+      workerTypes: user.workerTypes,
+      companyId: user.companyId,
+      companyName: user.company.name,
+    },
+  };
+}
 }
