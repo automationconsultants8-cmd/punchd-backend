@@ -136,6 +136,10 @@ model User {
   timesheets              Timesheet[]
   timesheetsReviewed      Timesheet[] @relation("TimesheetReviewer")
 
+  volunteerGoal           VolunteerGoal?
+  volunteerSignOffRequests VolunteerSignOffRequest[]
+  volunteerCertificates   VolunteerCertificate[]
+
   @@unique([companyId, phone])
   @@index([companyId, email])
   @@map("users")
