@@ -261,4 +261,30 @@ export class TimesheetsService {
       orderBy: { clockInTime: 'desc' },
     });
   }
+  async delete(timesheetId: string, userId: string, companyId: string) {
+  const timesheet = await this.prisma.timesheet.findFirst({
+    where: { id: timesheetId, userId, companyId },
+  });
+
+  if (!timesheet) {
+    throw new NotFoundException('Timesheet not found');
+  }
+
+  if (timesheet.status !== 'DRAFT') {
+    throw new BadRequestException('Only draft timesheets can be deleted');
+  }
+
+  // Unlink entries
+  await this.prisma.timeEntry.updateMany({
+    where: { timesheetId },
+    data: { timesheetId: null },
+  });
+
+  // Delete timesheet
+  await this.prisma.timesheet.delete({
+    where: { id: timesheetId },
+  });
+
+  return { success: true };
+ }
 }
