@@ -27,7 +27,7 @@ async function bootstrap() {
       'http://localhost:5173',
       'https://app.gopunchd.com',
       'https://gopunchd.com',
-      'https://portal.gopunchd.com'
+      'https://portal.gopunchd.com',
       'https://volunteer.gopunchd.com'
     ],
     credentials: true,
