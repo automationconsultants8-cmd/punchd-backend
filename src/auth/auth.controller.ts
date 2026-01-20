@@ -46,6 +46,25 @@ export class AuthController {
   return this.authService.contractorLogin(loginDto.email, loginDto.password);
 }
 
+  // ============================================
+// VOLUNTEER AUTH (Phone + SMS Code)
+// ============================================
+
+@Post('volunteer/send-code')
+@HttpCode(HttpStatus.OK)
+@ApiOperation({ summary: 'Send verification code to volunteer phone' })
+async sendVolunteerCode(@Body() body: { phone: string }) {
+  return this.authService.sendVolunteerCode(body.phone);
+}
+
+@Post('volunteer/verify-code')
+@HttpCode(HttpStatus.OK)
+@ApiOperation({ summary: 'Verify code and login volunteer' })
+async verifyVolunteerCode(@Body() body: { phone: string; code: string }) {
+  return this.authService.verifyVolunteerCode(body.phone, body.code);
+}
+
+
   @Post('verify-otp-and-login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify OTP and login in one step (Mobile - Workers)' })
