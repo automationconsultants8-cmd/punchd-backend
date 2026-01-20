@@ -25,6 +25,7 @@ import { PayPeriodsModule } from './pay-periods/pay-periods.module';
 import { LeaveModule } from './leave/leave.module';
 import { TasksModule } from './tasks/tasks.module';
 import { TimesheetsModule } from './timesheets/timesheets.module';
+import { VolunteerModule } from './volunteer/volunteer.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { TimesheetsModule } from './timesheets/timesheets.module';
     LeaveModule,
     TasksModule,
     TimesheetsModule,
+    VolunteerModule,
   ],
 })
 export class AppModule {}
