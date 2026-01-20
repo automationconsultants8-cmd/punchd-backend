@@ -24,6 +24,7 @@ import { RoleManagementModule } from './role-management/role-management.module';
 import { PayPeriodsModule } from './pay-periods/pay-periods.module';
 import { LeaveModule } from './leave/leave.module';
 import { TasksModule } from './tasks/tasks.module';
+import { TimesheetsModule } from './timesheets/timesheets.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { TasksModule } from './tasks/tasks.module';
     PayPeriodsModule,
     LeaveModule,
     TasksModule,
+    TimesheetsModule,
   ],
 })
 export class AppModule {}
