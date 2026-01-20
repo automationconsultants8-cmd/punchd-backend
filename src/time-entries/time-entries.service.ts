@@ -833,8 +833,8 @@ private async check7thConsecutiveDay(
     }
 
 // Store as Pacific time (UTC-8)
-const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00-08:00`);
-const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00-08:00`);
+const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00.000Z`);
+const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00.000Z`);
     
     if (clockOutTime <= clockInTime) {
       throw new BadRequestException('Clock out time must be after clock in time');
@@ -861,9 +861,9 @@ const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00-08:00`);
         durationMinutes: workMinutes,
         breakMinutes: dto.breakMinutes || 0,
         notes: dto.notes,
-        approvalStatus: 'APPROVED',
-        approvedById: createdById,
-        approvedAt: new Date(),
+        approvalStatus: 'PENDING',
+        approvedById: null,
+        approvedAt: null,
         regularMinutes: overtimeCalc.regularMinutes,
         overtimeMinutes: overtimeCalc.overtimeMinutes,
         doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
