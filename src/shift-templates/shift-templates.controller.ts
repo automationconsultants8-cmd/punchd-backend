@@ -2,7 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request }
 import { ShiftTemplatesService } from './shift-templates.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
-@Controller('api/shift-templates')
+@Controller('shift-templates')
 @UseGuards(JwtAuthGuard)
 export class ShiftTemplatesController {
   constructor(private service: ShiftTemplatesService) {}
