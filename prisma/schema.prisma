@@ -55,6 +55,7 @@ model Company {
   leavePolicies         LeavePolicy[]
   leaveBalances         LeaveBalance[]
   timesheets            Timesheet[]
+  shiftTemplates      ShiftTemplate[]
 
   @@map("companies")
 }
@@ -77,6 +78,12 @@ enum ApprovalStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum ShiftAssignmentStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
 }
 
 model User {
@@ -315,6 +322,7 @@ model Job {
   workerJobRates        WorkerJobRate[]
   certifiedPayrolls     CertifiedPayroll[]
   managers              ManagerLocationAssignment[] @relation("LocationManagers")
+  shiftTemplates      ShiftTemplate[] @relation("ShiftTemplateJob")
 
   @@index([companyId, isActive])
   @@map("jobs")
@@ -636,6 +644,11 @@ model ShiftRequest {
   reviewedById    String?
   reviewedAt      DateTime?
   reviewerNotes   String?
+  templateId          String?
+  assignmentBatchId   String?
+  assignmentStatus    ShiftAssignmentStatus @default(PENDING)
+  declineReason       String?
+  respondedAt         DateTime?
   
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
@@ -645,7 +658,10 @@ model ShiftRequest {
   requester       User               @relation("ShiftRequestRequester", fields: [requesterId], references: [id], onDelete: Cascade)
   swapTarget      User?              @relation("ShiftRequestSwapTarget", fields: [swapTargetId], references: [id], onDelete: SetNull)
   reviewedBy      User?              @relation("ShiftRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  template            ShiftTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   shiftOffers     ShiftOffer[]
+
+
 
   @@index([companyId, status])
   @@index([requesterId, status])
@@ -683,6 +699,28 @@ enum TimeOffStatus {
   APPROVED
   DECLINED
   CANCELLED
+}
+
+
+model ShiftTemplate {
+  id            String      @id @default(uuid())
+  companyId     String
+  name          String
+  daysOfWeek    Int[]       // [0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat]
+  startTime     String      // "09:00" format
+  endTime       String      // "17:00" format
+  jobId         String?
+  notes         String?
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  job           Job?        @relation("ShiftTemplateJob", fields: [jobId], references: [id])
+  shifts        Shift[]
+
+  @@index([companyId, isActive])
+  @@map("shift_templates")
 }
 
 model TimeOffRequest {
