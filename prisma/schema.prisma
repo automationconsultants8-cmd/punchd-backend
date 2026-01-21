@@ -607,7 +607,7 @@ model Shift {
   id                  String      @id @default(uuid())
   companyId           String
   userId              String?
-  jobId               String
+  jobId               String?
   shiftDate           DateTime    @db.Date
   startTime           DateTime
   endTime             DateTime
