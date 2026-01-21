@@ -221,4 +221,41 @@ export class VolunteerService {
       },
     });
   }
+
+  async generateCertificate(userId: string, companyId: string) {
+  // Get user's total volunteer hours
+  const entries = await this.prisma.timeEntry.findMany({
+    where: {
+      userId,
+      workerType: 'VOLUNTEER',
+      approvalStatus: 'APPROVED',
+      clockOutTime: { not: null },
+    },
+  });
+
+  const totalMinutes = entries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+  const totalHours = Math.floor(totalMinutes / 60);
+
+  if (totalHours < 1) {
+    throw new BadRequestException('You need at least 1 approved hour to generate a certificate');
+  }
+
+  // Get user info
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+    include: { company: true },
+  });
+
+  // Create certificate record
+  const certificate = await this.prisma.volunteerCertificate.create({
+    data: {
+      userId,
+      companyId,
+      title: `Volunteer Service Certificate - ${totalHours} Hours`,
+      description: `Awarded to ${user.name} for ${totalHours} hours of volunteer service with ${user.company.name}`,
+      hoursEarned: totalHours,
+    },
+  });
+
+  return certificate;
 }
