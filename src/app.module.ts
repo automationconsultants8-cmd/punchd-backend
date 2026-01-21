@@ -26,6 +26,7 @@ import { LeaveModule } from './leave/leave.module';
 import { TasksModule } from './tasks/tasks.module';
 import { TimesheetsModule } from './timesheets/timesheets.module';
 import { VolunteerModule } from './volunteer/volunteer.module';
+import { ShiftTemplatesModule } from './shift-templates/shift-templates.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { VolunteerModule } from './volunteer/volunteer.module';
     TasksModule,
     TimesheetsModule,
     VolunteerModule,
+    ShiftTemplatesModule,
   ],
 })
 export class AppModule {}
