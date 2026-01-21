@@ -42,6 +42,8 @@ export class VolunteerController {
     return this.volunteerService.getSignOffRequests(req.user.userId);
   }
 
+  
+
   @Post('sign-off-requests')
   async createSignOffRequest(
     @Request() req,
@@ -76,4 +78,9 @@ export class VolunteerController {
   async approveSignOff(@Param('id') id: string, @Request() req) {
     return this.volunteerService.approveSignOff(id, req.user.userId);
   }
+
+  @Post('certificates/generate')
+async generateCertificate(@Request() req) {
+  return this.volunteerService.generateCertificate(req.user.userId, req.user.companyId);
+}
 }
