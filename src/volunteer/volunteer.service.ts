@@ -3,7 +3,6 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-
 @Injectable()
 export class VolunteerService {
   constructor(private prisma: PrismaService) {}
@@ -13,7 +12,6 @@ export class VolunteerService {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const yearStart = new Date(now.getFullYear(), 0, 1);
 
-    // Get volunteer entries
     const entries = await this.prisma.timeEntry.findMany({
       where: {
         userId,
@@ -35,17 +33,14 @@ export class VolunteerService {
       }
     });
 
-    // Get goal
     const goal = await this.prisma.volunteerGoal.findUnique({
       where: { userId },
     });
 
-    // Get pending sign-offs
     const pendingSignOffs = await this.prisma.volunteerSignOffRequest.count({
       where: { userId, status: 'PENDING' },
     });
 
-    // Get certificates
     const certificates = await this.prisma.volunteerCertificate.count({
       where: { userId },
     });
@@ -73,11 +68,8 @@ export class VolunteerService {
       where: { userId },
     });
 
-    if (!goal) {
-      return null;
-    }
+    if (!goal) return null;
 
-    // Calculate progress
     const now = new Date();
     let startDate: Date;
     let endDate: Date;
@@ -141,7 +133,6 @@ export class VolunteerService {
     supervisorName?: string,
     notes?: string,
   ) {
-    // Verify entries belong to user and are PENDING
     const entries = await this.prisma.timeEntry.findMany({
       where: {
         id: { in: timeEntryIds },
@@ -193,7 +184,6 @@ export class VolunteerService {
     });
   }
 
-  // Admin: approve sign-off request
   async approveSignOff(requestId: string, reviewerId: string) {
     const request = await this.prisma.volunteerSignOffRequest.findUnique({
       where: { id: requestId },
@@ -202,7 +192,6 @@ export class VolunteerService {
     if (!request) throw new NotFoundException('Sign-off request not found');
     if (request.status !== 'PENDING') throw new BadRequestException('Request already processed');
 
-    // Approve all time entries in the request
     await this.prisma.timeEntry.updateMany({
       where: { id: { in: request.timeEntryIds } },
       data: {
@@ -212,7 +201,6 @@ export class VolunteerService {
       },
     });
 
-    // Update request status
     return this.prisma.volunteerSignOffRequest.update({
       where: { id: requestId },
       data: {
@@ -223,8 +211,7 @@ export class VolunteerService {
     });
   }
 
-async generateCertificate(userId: string, companyId: string) {
-    // Get user's total volunteer hours
+  async generateCertificate(userId: string, companyId: string) {
     const entries = await this.prisma.timeEntry.findMany({
       where: {
         userId,
@@ -241,7 +228,6 @@ async generateCertificate(userId: string, companyId: string) {
       throw new BadRequestException('You need at least 1 approved hour to generate a certificate');
     }
 
-    // Get user info
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { company: true },
@@ -251,7 +237,6 @@ async generateCertificate(userId: string, companyId: string) {
       throw new NotFoundException('User not found');
     }
 
-    // Create certificate record
     const certificate = await this.prisma.volunteerCertificate.create({
       data: {
         userId,
@@ -263,5 +248,104 @@ async generateCertificate(userId: string, companyId: string) {
     });
 
     return certificate;
+  }
+
+  // ============================================
+  // ADMIN ENDPOINTS
+  // ============================================
+
+  async getAllPendingSignOffs(companyId: string) {
+    return this.prisma.volunteerSignOffRequest.findMany({
+      where: { companyId, status: 'PENDING' },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async getAllVolunteersPending(companyId: string) {
+    return this.prisma.timeEntry.findMany({
+      where: {
+        companyId,
+        workerType: 'VOLUNTEER',
+        approvalStatus: 'PENDING',
+        clockOutTime: { not: null },
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true } },
+        job: { select: { id: true, name: true } },
+      },
+      orderBy: { clockInTime: 'desc' },
+    });
+  }
+
+  async getAllContractorsPending(companyId: string) {
+    return this.prisma.timeEntry.findMany({
+      where: {
+        companyId,
+        workerType: 'CONTRACTOR',
+        approvalStatus: 'PENDING',
+        clockOutTime: { not: null },
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true } },
+        job: { select: { id: true, name: true } },
+      },
+      orderBy: { clockInTime: 'desc' },
+    });
+  }
+
+  async getApprovalStats(companyId: string) {
+    const [contractorPending, volunteerPending, signOffPending] = await Promise.all([
+      this.prisma.timeEntry.count({
+        where: { companyId, workerType: 'CONTRACTOR', approvalStatus: 'PENDING', clockOutTime: { not: null } },
+      }),
+      this.prisma.timeEntry.count({
+        where: { companyId, workerType: 'VOLUNTEER', approvalStatus: 'PENDING', clockOutTime: { not: null } },
+      }),
+      this.prisma.volunteerSignOffRequest.count({
+        where: { companyId, status: 'PENDING' },
+      }),
+    ]);
+
+    return { contractorPending, volunteerPending, signOffPending };
+  }
+
+  async bulkApproveEntries(entryIds: string[], approverId: string) {
+    return this.prisma.timeEntry.updateMany({
+      where: { id: { in: entryIds } },
+      data: {
+        approvalStatus: 'APPROVED',
+        approvedById: approverId,
+        approvedAt: new Date(),
+      },
+    });
+  }
+
+  async bulkRejectEntries(entryIds: string[], approverId: string, reason: string) {
+    return this.prisma.timeEntry.updateMany({
+      where: { id: { in: entryIds } },
+      data: {
+        approvalStatus: 'REJECTED',
+        approvedById: approverId,
+        approvedAt: new Date(),
+        rejectionReason: reason,
+      },
+    });
+  }
+
+  async generateCertificateForUser(userId: string, companyId: string) {
+    return this.generateCertificate(userId, companyId);
+  }
+
+  async getAllCertificates(companyId: string) {
+    return this.prisma.volunteerCertificate.findMany({
+      where: { companyId },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true } },
+      },
+      orderBy: { issuedAt: 'desc' },
+    });
   }
 }
