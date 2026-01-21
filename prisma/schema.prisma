@@ -41,6 +41,7 @@ model Company {
   violations            Violation[]
   faceVerificationLogs  FaceVerificationLog[]
   shifts                Shift[]
+  shiftTemplates        ShiftTemplate[]
   auditLogs             AuditLog[]
   workerJobRates        WorkerJobRate[]
   breakViolations       BreakViolation[]
@@ -55,7 +56,6 @@ model Company {
   leavePolicies         LeavePolicy[]
   leaveBalances         LeaveBalance[]
   timesheets            Timesheet[]
-  shiftTemplates      ShiftTemplate[]
 
   @@map("companies")
 }
@@ -319,10 +319,10 @@ model Job {
   company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   timeEntries           TimeEntry[]
   shifts                Shift[]
+  shiftTemplates        ShiftTemplate[] @relation("ShiftTemplateJob")
   workerJobRates        WorkerJobRate[]
   certifiedPayrolls     CertifiedPayroll[]
   managers              ManagerLocationAssignment[] @relation("LocationManagers")
-  shiftTemplates      ShiftTemplate[] @relation("ShiftTemplateJob")
 
   @@index([companyId, isActive])
   @@map("jobs")
@@ -582,30 +582,59 @@ enum ShiftStatus {
   OPEN
 }
 
-model Shift {
+model ShiftTemplate {
   id            String      @id @default(uuid())
   companyId     String
-  userId        String?
-  jobId         String
-  shiftDate     DateTime    @db.Date
-  startTime     DateTime
-  endTime       DateTime
-  status        ShiftStatus @default(SCHEDULED)
-  isOpen        Boolean     @default(false)
+  name          String
+  daysOfWeek    Int[]
+  startTime     String
+  endTime       String
+  jobId         String?
   notes         String?
+  isActive      Boolean     @default(true)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
   company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user          User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job           Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job           Job?        @relation("ShiftTemplateJob", fields: [jobId], references: [id])
+  shifts        Shift[]
+
+  @@index([companyId, isActive])
+  @@map("shift_templates")
+}
+
+model Shift {
+  id                  String      @id @default(uuid())
+  companyId           String
+  userId              String?
+  jobId               String
+  shiftDate           DateTime    @db.Date
+  startTime           DateTime
+  endTime             DateTime
+  status              ShiftStatus @default(SCHEDULED)
+  isOpen              Boolean     @default(false)
+  notes               String?
+  templateId          String?
+  assignmentBatchId   String?
+  assignmentStatus    ShiftAssignmentStatus @default(PENDING)
+  declineReason       String?
+  respondedAt         DateTime?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  company             Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job                 Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  template            ShiftTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   
-  shiftRequests ShiftRequest[]
+  shiftRequests       ShiftRequest[]
 
   @@index([companyId, shiftDate])
   @@index([companyId, isOpen])
   @@index([userId, shiftDate])
   @@index([jobId, shiftDate])
+  @@index([templateId])
+  @@index([assignmentBatchId])
   @@map("shifts")
 }
 
@@ -644,11 +673,6 @@ model ShiftRequest {
   reviewedById    String?
   reviewedAt      DateTime?
   reviewerNotes   String?
-  templateId          String?
-  assignmentBatchId   String?
-  assignmentStatus    ShiftAssignmentStatus @default(PENDING)
-  declineReason       String?
-  respondedAt         DateTime?
   
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
@@ -658,10 +682,7 @@ model ShiftRequest {
   requester       User               @relation("ShiftRequestRequester", fields: [requesterId], references: [id], onDelete: Cascade)
   swapTarget      User?              @relation("ShiftRequestSwapTarget", fields: [swapTargetId], references: [id], onDelete: SetNull)
   reviewedBy      User?              @relation("ShiftRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
-  template            ShiftTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   shiftOffers     ShiftOffer[]
-
-
 
   @@index([companyId, status])
   @@index([requesterId, status])
@@ -699,28 +720,6 @@ enum TimeOffStatus {
   APPROVED
   DECLINED
   CANCELLED
-}
-
-
-model ShiftTemplate {
-  id            String      @id @default(uuid())
-  companyId     String
-  name          String
-  daysOfWeek    Int[]       // [0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat]
-  startTime     String      // "09:00" format
-  endTime       String      // "17:00" format
-  jobId         String?
-  notes         String?
-  isActive      Boolean     @default(true)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-
-  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  job           Job?        @relation("ShiftTemplateJob", fields: [jobId], references: [id])
-  shifts        Shift[]
-
-  @@index([companyId, isActive])
-  @@map("shift_templates")
 }
 
 model TimeOffRequest {
@@ -910,16 +909,13 @@ model AuditLog {
   @@index([userId, createdAt])
   @@map("audit_logs")
 }
-// ============================================
-// VOLUNTEER MODELS
-// ============================================
 
 model VolunteerGoal {
   id              String   @id @default(uuid())
   userId          String   @unique
   companyId       String
   targetHours     Int
-  periodType      String   @default("MONTHLY") // MONTHLY, YEARLY, CUSTOM
+  periodType      String   @default("MONTHLY")
   startDate       DateTime?
   endDate         DateTime?
   createdAt       DateTime @default(now())
