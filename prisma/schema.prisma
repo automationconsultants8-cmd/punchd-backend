@@ -624,7 +624,7 @@ model Shift {
 
   company             Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user                User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job                 Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job                 Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
   template            ShiftTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   
   shiftRequests       ShiftRequest[]
