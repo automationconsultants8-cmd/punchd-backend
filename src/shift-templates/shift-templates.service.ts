@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../prisma.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -13,7 +13,6 @@ export class ShiftTemplatesService {
       orderBy: { name: 'asc' },
     });
 
-    // Get worker counts for each template
     const templatesWithCounts = await Promise.all(
       templates.map(async (t) => {
         const workerCount = await this.prisma.shift.groupBy({
@@ -69,7 +68,6 @@ export class ShiftTemplatesService {
   async delete(id: string, companyId: string) {
     await this.findOne(id, companyId);
     
-    // Delete future shifts for this template
     await this.prisma.shift.deleteMany({
       where: {
         templateId: id,
@@ -99,14 +97,12 @@ export class ShiftTemplatesService {
     const start = new Date(data.startDate);
     const end = new Date(data.endDate);
 
-    // Generate shifts for each day in range that matches template days
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dayOfWeek = d.getDay();
       
       if (template.daysOfWeek.includes(dayOfWeek)) {
         const shiftDate = new Date(d);
         
-        // Parse time strings
         const [startHour, startMin] = template.startTime.split(':').map(Number);
         const [endHour, endMin] = template.endTime.split(':').map(Number);
 
@@ -164,7 +160,6 @@ export class ShiftTemplatesService {
       orderBy: { shiftDate: 'asc' },
     });
 
-    // Group by user with date ranges
     const workerMap = new Map<string, any>();
     
     for (const a of assignments) {
@@ -203,7 +198,6 @@ export class ShiftTemplatesService {
     return { deleted: result.count };
   }
 
-  // One-off shift creation
   async createOneOff(companyId: string, data: {
     date: string;
     startTime: string;
@@ -227,7 +221,7 @@ export class ShiftTemplatesService {
     const shifts = data.userIds.map((userId) => ({
       companyId,
       userId,
-      jobId: data.jobId,
+      jobId: data.jobId || null,
       shiftDate,
       startTime,
       endTime,
@@ -244,7 +238,6 @@ export class ShiftTemplatesService {
     };
   }
 
-  // Worker responds to shift assignment
   async respondToShift(userId: string, batchId: string, accept: boolean, declineReason?: string) {
     const shifts = await this.prisma.shift.findMany({
       where: { userId, assignmentBatchId: batchId },
@@ -266,7 +259,6 @@ export class ShiftTemplatesService {
     return { updated: shifts.length, status: accept ? 'ACCEPTED' : 'DECLINED' };
   }
 
-  // Today's shifts for dashboard
   async getTodayShifts(companyId: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -285,7 +277,6 @@ export class ShiftTemplatesService {
       orderBy: { startTime: 'asc' },
     });
 
-    // Group by job
     const byJob = new Map<string, any>();
     
     for (const s of shifts) {
@@ -319,7 +310,6 @@ export class ShiftTemplatesService {
     return Array.from(byJob.values());
   }
 
-  // Worker's upcoming shifts
   async getMyShifts(userId: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -337,7 +327,6 @@ export class ShiftTemplatesService {
     });
   }
 
-  // Pending assignments for worker
   async getPendingAssignments(userId: string) {
     const shifts = await this.prisma.shift.findMany({
       where: {
@@ -351,7 +340,6 @@ export class ShiftTemplatesService {
       orderBy: { shiftDate: 'asc' },
     });
 
-    // Group by batchId
     const batches = new Map<string, any>();
     
     for (const s of shifts) {
