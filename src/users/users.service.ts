@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service';
 import { AwsService } from '../aws/aws.service';
 import { AuditService } from '../audit/audit.service';
+import { StripeService } from '../stripe/stripe.service';
 import { CreateUserDto, UpdateUserDto, SetWorkerJobRateDto } from './dto';
 import { Decimal } from '@prisma/client/runtime/library';
 import * as bcrypt from 'bcrypt';
@@ -12,6 +13,7 @@ export class UsersService {
     private prisma: PrismaService,
     private awsService: AwsService,
     private auditService: AuditService,
+    private stripeService: StripeService,
   ) {}
 
   async create(companyId: string, dto: CreateUserDto, performedBy?: string) {
@@ -71,6 +73,9 @@ export class UsersService {
       targetId: user.id,
       details: { name: user.name, phone: user.phone, role: user.role, hourlyRate: dto.hourlyRate },
     });
+
+    // Sync Stripe subscription with new worker count
+    await this.stripeService.onWorkerCountChanged(companyId);
 
     return user;
   }
@@ -279,6 +284,11 @@ export class UsersService {
       });
     }
 
+    // If workerTypes or isActive changed, sync Stripe
+    if (dto.workerTypes !== undefined || dto.isActive !== undefined) {
+      await this.stripeService.onWorkerCountChanged(companyId);
+    }
+
     return updatedUser;
   }
 
@@ -294,10 +304,15 @@ export class UsersService {
       details: { userName: user.name },
     });
 
-    return this.prisma.user.update({
+    const result = await this.prisma.user.update({
       where: { id: userId },
       data: { isActive: false },
     });
+
+    // Sync Stripe subscription with new worker count
+    await this.stripeService.onWorkerCountChanged(companyId);
+
+    return result;
   }
 
   async approveWorker(companyId: string, userId: string, performedBy?: string) {
@@ -325,6 +340,9 @@ export class UsersService {
       details: { userName: user.name },
     });
 
+    // Sync Stripe subscription (worker is now active)
+    await this.stripeService.onWorkerCountChanged(companyId);
+
     return updatedUser;
   }
 
@@ -348,6 +366,9 @@ export class UsersService {
       targetId: userId,
       details: { userName: user.name },
     });
+
+    // Sync Stripe subscription (worker is now inactive)
+    await this.stripeService.onWorkerCountChanged(companyId);
 
     return updatedUser;
   }
