@@ -18,7 +18,7 @@ const PRICE_IDS = {
     monthly: 'price_1SmUVrQXF9jw9z1yZ27dYCBr',
     yearly: 'price_1SmUWBQXF9jw9z1yvOo4nC43',
   },
-  contractor: {
+  enterprise: {
     monthly: 'price_1SmUWUQXF9jw9z1y7TqMc3mN',
     yearly: 'price_1SmUWtQXF9jw9z1yhgdtms00',
   },
@@ -28,14 +28,14 @@ const PRICE_IDS = {
 const SETUP_FEE_IDS = {
   starter: 'price_1SmUXCQXF9jw9z1yowceibih',
   professional: 'price_1SmUXaQXF9jw9z1ytekwjdnM',
-  contractor: null, // No setup fee for contractor
+  enterprise: null, // No setup fee for enterprise
 };
 
 // Minimum users per plan
 const MINIMUM_USERS = {
   starter: 5,
   professional: 5,
-  contractor: 10,
+  enterprise: 10,
 };
 
 @Injectable()
@@ -59,7 +59,7 @@ export class StripeService {
     requestedWorkerCount: number
   ) {
     // Validate plan
-    if (!['starter', 'professional', 'contractor'].includes(planId)) {
+    if (!['starter', 'professional', 'enterprise'].includes(planId)) {
       throw new BadRequestException('Invalid plan selected');
     }
 
@@ -81,9 +81,12 @@ export class StripeService {
       where: { id: userId },
     });
 
-    // Calculate quantity (use requested count, but enforce minimum)
+    // Get actual worker count from database
+    const actualWorkerCount = await this.getActiveWorkerCount(companyId);
+    
+    // Calculate quantity (use actual count, but enforce minimum)
     const minimumUsers = MINIMUM_USERS[planId as keyof typeof MINIMUM_USERS];
-    const quantity = Math.max(requestedWorkerCount, minimumUsers);
+    const quantity = Math.max(actualWorkerCount, minimumUsers);
 
     // Get price ID
     const priceId = PRICE_IDS[planId as keyof typeof PRICE_IDS][billingCycle];
@@ -192,6 +195,72 @@ export class StripeService {
     });
 
     return { url: session.url };
+  }
+
+  // Get active worker count for a company
+  async getActiveWorkerCount(companyId: string): Promise<number> {
+    const count = await this.prisma.user.count({
+      where: {
+        companyId,
+        workerTypes: {
+          isEmpty: false, // Has at least one worker type = is a worker
+        },
+      },
+    });
+    return count;
+  }
+
+  // Sync subscription quantity with actual worker count
+  async syncSubscriptionQuantity(companyId: string): Promise<void> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+    });
+
+    if (!company || !company.stripeSubscriptionId) {
+      return; // No active subscription to sync
+    }
+
+    const tier = company.subscriptionTier?.toLowerCase() || '';
+    if (!['starter', 'professional', 'enterprise'].includes(tier)) {
+      return; // Not on a paid plan
+    }
+
+    const actualWorkerCount = await this.getActiveWorkerCount(companyId);
+    const minimumUsers = MINIMUM_USERS[tier as keyof typeof MINIMUM_USERS] || 5;
+    const newQuantity = Math.max(actualWorkerCount, minimumUsers);
+
+    try {
+      // Get current subscription
+      const subscription = await this.stripe.subscriptions.retrieve(company.stripeSubscriptionId);
+      
+      if (subscription.status !== 'active') {
+        return;
+      }
+
+      // Get the main subscription item (first item)
+      const subscriptionItem = subscription.items.data[0];
+      const currentQuantity = subscriptionItem.quantity || 0;
+
+      if (newQuantity !== currentQuantity) {
+        // Update the subscription quantity
+        await this.stripe.subscriptions.update(company.stripeSubscriptionId, {
+          items: [{
+            id: subscriptionItem.id,
+            quantity: newQuantity,
+          }],
+          proration_behavior: 'create_prorations', // Charge/credit for the difference
+        });
+
+        console.log(`📊 Updated subscription for ${company.name}: ${currentQuantity} → ${newQuantity} users`);
+      }
+    } catch (err) {
+      console.error(`Failed to sync subscription quantity for ${company.name}:`, err);
+    }
+  }
+
+  // Call this when a worker is added or removed
+  async onWorkerCountChanged(companyId: string): Promise<void> {
+    await this.syncSubscriptionQuantity(companyId);
   }
 
   async handleWebhook(payload: Buffer, signature: string) {
@@ -376,10 +445,8 @@ export class StripeService {
       throw new BadRequestException('Company not found');
     }
 
-    // Count workers
-    const workerCount = await this.prisma.user.count({
-      where: { companyId },
-    });
+    // Count workers (users with workerTypes)
+    const workerCount = await this.getActiveWorkerCount(companyId);
 
     const now = new Date();
     let daysRemaining: number | null = null;
@@ -401,7 +468,7 @@ export class StripeService {
       }
     }
 
-    const isPaid = ['starter', 'professional', 'contractor'].includes(
+    const isPaid = ['starter', 'professional', 'enterprise'].includes(
       company.subscriptionTier?.toLowerCase() || ''
     );
 
