@@ -4,11 +4,13 @@ import { BreakComplianceService, BreakComplianceSettings } from './break-complia
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RequiresFeature } from '../features/feature.decorator';
 import { FeatureGuard } from '../features/feature.guard';
+import { SettingsGuard, RequireSetting } from '../common/settings.guard';
 
 @ApiTags('Break Compliance')
 @Controller('break-compliance')
-@UseGuards(JwtAuthGuard, FeatureGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard, SettingsGuard)
 @RequiresFeature('BREAK_COMPLIANCE')
+@RequireSetting('breakTracking')
 @ApiBearerAuth()
 export class BreakComplianceController {
   constructor(private readonly breakComplianceService: BreakComplianceService) {}
