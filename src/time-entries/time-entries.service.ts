@@ -975,7 +975,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
   return entry;
 }
-  }
+  
 
   async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
     const where: any = { companyId, clockOutTime: { not: null } };
