@@ -402,6 +402,9 @@ async clockOut(userId: string, companyId: string, dto: ClockOutDto) {
   return updatedEntry;
 }
   
+// REPLACE the entire calculateOvertimeForEntry method AND check7thConsecutiveDay method
+// Find these methods (around line 381-550) and replace with this code
+
 private async calculateOvertimeForEntry(
   userId: string,
   companyId: string,
@@ -417,6 +420,7 @@ private async calculateOvertimeForEntry(
 
   let hourlyRate: number | null = null;
 
+  // Get job-specific rate or default
   if (jobId) {
     const jobRate = await this.prisma.workerJobRate.findFirst({
       where: { userId, jobId },
@@ -438,6 +442,22 @@ private async calculateOvertimeForEntry(
     hourlyRate = Number(user.hourlyRate);
   }
 
+  // Get company overtime settings
+  const company = await this.prisma.company.findUnique({
+    where: { id: companyId },
+    select: { overtimeSettings: true },
+  });
+
+  const otSettings = (company?.overtimeSettings as any) || {};
+  const dailyRegularLimit = otSettings.dailyOtThreshold ?? 480; // 8 hours in minutes
+  const dailyOvertimeLimit = otSettings.dailyDtThreshold ?? 720; // 12 hours in minutes
+  const weeklyRegularLimit = otSettings.weeklyOtThreshold ?? 2400; // 40 hours in minutes
+  const otMultiplier = otSettings.otMultiplier ?? 1.5;
+  const dtMultiplier = otSettings.dtMultiplier ?? 2.0;
+
+  // ============================================
+  // CALCULATE DAILY HOURS (same day before this entry)
+  // ============================================
   const dayStart = new Date(clockInTime);
   dayStart.setHours(0, 0, 0, 0);
   const dayEnd = new Date(clockInTime);
@@ -456,65 +476,182 @@ private async calculateOvertimeForEntry(
   const previousDailyMinutes = dailyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
   const totalDailyMinutes = previousDailyMinutes + workMinutes;
 
+  // ============================================
+  // CALCULATE WEEKLY HOURS (same workweek before this entry)
+  // Workweek starts on Sunday (configurable via otSettings.workweekStartDay)
+  // ============================================
+  const workweekStartDay = otSettings.workweekStartDay ?? 0; // 0 = Sunday
+  const currentDayOfWeek = clockInTime.getDay();
+  const daysFromWeekStart = (currentDayOfWeek - workweekStartDay + 7) % 7;
+  
+  const weekStart = new Date(clockInTime);
+  weekStart.setDate(weekStart.getDate() - daysFromWeekStart);
+  weekStart.setHours(0, 0, 0, 0);
+
+  const weeklyEntries = await this.prisma.timeEntry.findMany({
+    where: {
+      userId,
+      companyId,
+      clockInTime: { gte: weekStart, lt: dayStart }, // Before today (same week)
+      clockOutTime: { not: null },
+    },
+    select: { durationMinutes: true },
+  });
+
+  const previousWeeklyMinutes = weeklyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+  // Total weekly = previous days this week + previous today + this entry
+  const totalWeeklyMinutes = previousWeeklyMinutes + previousDailyMinutes + workMinutes;
+
+  // ============================================
+  // CHECK FOR 7TH CONSECUTIVE DAY
+  // ============================================
+  let is7thConsecutiveDay = false;
+  if (toggles?.seventhDayOtRule !== false) { // Default ON for California compliance
+    is7thConsecutiveDay = await this.check7thConsecutiveDay(userId, companyId, clockInTime);
+  }
+
+  // ============================================
+  // CALCULATE OT/DT BASED ON CALIFORNIA RULES
+  // California requires the calculation most favorable to the worker
+  // ============================================
   let regularMinutes = workMinutes;
   let overtimeMinutes = 0;
   let doubleTimeMinutes = 0;
 
-  // Get company overtime settings
-  const company = await this.prisma.company.findUnique({
-    where: { id: companyId },
-    select: { overtimeSettings: true },
-  });
-
-  const otSettings = (company?.overtimeSettings as any) || {};
-  const dailyRegularLimit = otSettings.dailyOtThreshold ?? 480;
-  const dailyOvertimeLimit = otSettings.dailyDtThreshold ?? 720;
-  const otMultiplier = otSettings.otMultiplier ?? 1.5;
-  const dtMultiplier = otSettings.dtMultiplier ?? 2.0;
-
-  // Check for 7th consecutive day (only if toggle is on)
-  let is7thConsecutiveDay = false;
-  if (toggles?.seventhDayOtRule) {
-    is7thConsecutiveDay = await this.check7thConsecutiveDay(userId, companyId, clockInTime);
-  }
-
   if (is7thConsecutiveDay) {
-    // 7th consecutive day: ALL hours are OT, hours over 8 are DT
+    // ============================================
+    // RULE: 7TH CONSECUTIVE DAY (California Labor Code 510)
+    // - First 8 hours: 1.5x overtime
+    // - Over 8 hours: 2x double time
+    // ============================================
     if (totalDailyMinutes > dailyRegularLimit) {
+      // Some hours are double time
       const dtMinutes = totalDailyMinutes - dailyRegularLimit;
       doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
       overtimeMinutes = workMinutes - doubleTimeMinutes;
       regularMinutes = 0;
     } else {
+      // All hours are overtime (1.5x)
       overtimeMinutes = workMinutes;
       regularMinutes = 0;
     }
   } else {
-    // Normal daily OT calculation
-    if (totalDailyMinutes > dailyOvertimeLimit) {
-      const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
-      doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
+    // ============================================
+    // CALCULATE DAILY OT/DT
+    // ============================================
+    let dailyRegular = workMinutes;
+    let dailyOT = 0;
+    let dailyDT = 0;
 
-      const remainingWork = workMinutes - doubleTimeMinutes;
+    if (totalDailyMinutes > dailyOvertimeLimit) {
+      // Over 12 hours - double time kicks in
+      const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
+      dailyDT = Math.min(dtMinutes, workMinutes);
+
+      const remainingWork = workMinutes - dailyDT;
       if (previousDailyMinutes < dailyOvertimeLimit) {
-        const otMinutesInRange = Math.min(dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit), remainingWork);
-        overtimeMinutes = Math.max(0, otMinutesInRange);
-        regularMinutes = remainingWork - overtimeMinutes;
+        const otMinutesInRange = Math.min(
+          dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit),
+          remainingWork
+        );
+        dailyOT = Math.max(0, otMinutesInRange);
+        dailyRegular = remainingWork - dailyOT;
       } else {
-        regularMinutes = 0;
-        overtimeMinutes = remainingWork;
+        dailyRegular = 0;
+        dailyOT = remainingWork;
       }
     } else if (totalDailyMinutes > dailyRegularLimit) {
+      // Over 8 hours - overtime kicks in
       if (previousDailyMinutes >= dailyRegularLimit) {
-        overtimeMinutes = workMinutes;
-        regularMinutes = 0;
+        dailyOT = workMinutes;
+        dailyRegular = 0;
       } else {
-        regularMinutes = Math.max(0, dailyRegularLimit - previousDailyMinutes);
-        overtimeMinutes = workMinutes - regularMinutes;
+        dailyRegular = Math.max(0, dailyRegularLimit - previousDailyMinutes);
+        dailyOT = workMinutes - dailyRegular;
+      }
+    }
+
+    // ============================================
+    // CALCULATE WEEKLY OT (Federal FLSA + California)
+    // Over 40 hours in a workweek = 1.5x overtime
+    // ============================================
+    let weeklyRegular = workMinutes;
+    let weeklyOT = 0;
+
+    const previousWeeklyTotal = previousWeeklyMinutes + previousDailyMinutes;
+    
+    if (totalWeeklyMinutes > weeklyRegularLimit) {
+      // Over 40 hours this week
+      if (previousWeeklyTotal >= weeklyRegularLimit) {
+        // Already over 40, all new hours are OT
+        weeklyOT = workMinutes;
+        weeklyRegular = 0;
+      } else {
+        // Crossing the 40-hour threshold
+        weeklyRegular = Math.max(0, weeklyRegularLimit - previousWeeklyTotal);
+        weeklyOT = workMinutes - weeklyRegular;
+      }
+    }
+
+    // ============================================
+    // APPLY MOST FAVORABLE CALCULATION TO WORKER
+    // California requires using whichever gives more OT
+    // ============================================
+    const dailyOTTotal = dailyOT + dailyDT; // DT counts as "better than OT"
+    const weeklyOTTotal = weeklyOT;
+
+    // Calculate effective OT value (DT is worth more)
+    const dailyOTValue = dailyOT * otMultiplier + dailyDT * dtMultiplier;
+    const weeklyOTValue = weeklyOT * otMultiplier;
+
+    if (dailyOTValue >= weeklyOTValue) {
+      // Daily calculation is more favorable (or equal)
+      regularMinutes = dailyRegular;
+      overtimeMinutes = dailyOT;
+      doubleTimeMinutes = dailyDT;
+    } else {
+      // Weekly calculation is more favorable
+      // Note: Weekly OT doesn't have double time, only 1.5x
+      regularMinutes = weeklyRegular;
+      overtimeMinutes = weeklyOT;
+      doubleTimeMinutes = 0;
+    }
+
+    // ============================================
+    // EDGE CASE: Combine daily DT with weekly OT
+    // If daily DT applies (>12 hrs) but weekly would also apply,
+    // ensure DT still gets applied since it's higher rate
+    // ============================================
+    if (dailyDT > 0 && weeklyOT > 0) {
+      // Keep daily DT, apply weekly OT to remaining regular
+      doubleTimeMinutes = dailyDT;
+      const remainingAfterDT = workMinutes - dailyDT;
+      
+      // Check if remaining would be OT under weekly rule
+      const weeklyMinutesBeforeThisEntry = previousWeeklyMinutes + previousDailyMinutes;
+      const weeklyMinutesAfterDT = weeklyMinutesBeforeThisEntry + remainingAfterDT;
+      
+      if (weeklyMinutesAfterDT > weeklyRegularLimit) {
+        const weeklyOTForRemaining = Math.min(
+          weeklyMinutesAfterDT - weeklyRegularLimit,
+          remainingAfterDT
+        );
+        // Also check daily OT for this remaining time
+        const dailyOTForRemaining = dailyOT;
+        
+        // Use the higher of weekly or daily OT for remaining time
+        overtimeMinutes = Math.max(weeklyOTForRemaining, dailyOTForRemaining);
+        regularMinutes = remainingAfterDT - overtimeMinutes;
+      } else {
+        overtimeMinutes = dailyOT;
+        regularMinutes = dailyRegular;
       }
     }
   }
 
+  // ============================================
+  // CALCULATE LABOR COST
+  // ============================================
   let laborCost: number | null = null;
   if (hourlyRate) {
     const regularPay = (regularMinutes / 60) * hourlyRate;
@@ -532,7 +669,10 @@ private async calculateOvertimeForEntry(
   };
 }
 
-// Helper method for 7th consecutive day check
+// ============================================
+// HELPER: CHECK FOR 7TH CONSECUTIVE WORK DAY
+// California Labor Code Section 510
+// ============================================
 private async check7thConsecutiveDay(
   userId: string,
   companyId: string,
@@ -541,9 +681,7 @@ private async check7thConsecutiveDay(
   const currentDay = new Date(clockInTime);
   currentDay.setHours(0, 0, 0, 0);
 
-  // Check the 6 days BEFORE today (not week-based)
-  let consecutiveDays = 0;
-  
+  // Check the 6 days BEFORE today
   for (let i = 1; i <= 6; i++) {
     const checkDate = new Date(currentDay);
     checkDate.setDate(checkDate.getDate() - i);
@@ -559,16 +697,14 @@ private async check7thConsecutiveDay(
       },
     });
 
-    if (workedThatDay) {
-      consecutiveDays++;
-    } else {
-      // If any of the previous 6 days was not worked, not 7th consecutive
+    if (!workedThatDay) {
+      // If any of the previous 6 days was not worked, NOT 7th consecutive
       return false;
     }
   }
 
-  // If all 6 previous days were worked, today is the 7th consecutive day
-  return consecutiveDays === 6;
+  // All 6 previous days were worked, today is the 7th consecutive day
+  return true;
 }
 
   async startBreak(userId: string) {
