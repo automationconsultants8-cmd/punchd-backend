@@ -1,12 +1,14 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Request, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { SettingsGuard, RequireSettingController } from '../common/settings.guard';
 import { ShiftsService } from './shifts.service';
 import { ShiftStatus } from '@prisma/client';
 
 @ApiTags('Shifts')
 @Controller('shifts')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SettingsGuard)
+@RequireSettingController('shiftScheduling')
 @ApiBearerAuth()
 export class ShiftsController {
   constructor(private readonly shiftsService: ShiftsService) {}
@@ -244,6 +246,7 @@ export class ShiftsController {
   delete(@Param('id') id: string, @Request() req) {
     return this.shiftsService.delete(id, req.user.id);
   }
+
   @Delete('worker/:userId/future')
   @ApiOperation({ summary: 'Delete all future shifts for a worker' })
   deleteFutureShifts(@Param('userId') userId: string, @Request() req) {
