@@ -7,6 +7,7 @@ export const FEATURE_FLAGS = {
   WORKER_MANAGEMENT: ['starter', 'professional', 'enterprise', 'trial'],
   CSV_EXPORTS: ['starter', 'professional', 'enterprise', 'trial'],
   GEOFENCING_BASIC: ['starter', 'professional', 'enterprise', 'trial'],
+  ROLE_MANAGEMENT: ['starter', 'professional', 'enterprise', 'trial'],
   
   // Professional features
   FACE_VERIFICATION: ['professional', 'enterprise', 'trial'],
