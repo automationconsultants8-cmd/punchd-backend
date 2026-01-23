@@ -5,11 +5,13 @@ import { TimeOffService } from './time-off.service';
 import { TimeOffStatus, TimeOffType } from '@prisma/client';
 import { RequiresFeature } from '../features/feature.decorator';
 import { FeatureGuard } from '../features/feature.guard';
+import { SettingsGuard, RequireSetting } from '../common/settings.guard';
 
 @ApiTags('Time Off')
 @Controller('time-off')
-@UseGuards(JwtAuthGuard, FeatureGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard, SettingsGuard)
 @RequiresFeature('TIME_OFF')
+@RequireSetting('leaveManagement')
 @ApiBearerAuth()
 export class TimeOffController {
   constructor(private readonly timeOffService: TimeOffService) {}
