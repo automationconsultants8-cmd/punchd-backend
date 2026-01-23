@@ -31,7 +31,6 @@ export const FEATURE_FLAGS = {
   CERTIFIED_PAYROLL: ['enterprise', 'trial'],
   PREVAILING_WAGE: ['enterprise', 'trial'],
   AUDIT_LOGS: ['enterprise', 'trial'],
-  ROLE_MANAGEMENT: ['enterprise', 'trial'],
   ADVANCED_ANALYTICS: ['enterprise', 'trial'],
   CUSTOM_REPORTS: ['enterprise', 'trial'],
 };
