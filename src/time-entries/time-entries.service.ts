@@ -2013,7 +2013,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     await this.auditService.log({
       companyId,
       userId: editedById,
-      action: 'TIME_ENTRY_EDITED',
+      action: 'TIME_ENTRY_ARCHIVED',
       targetType: 'TIME_ENTRY',
       targetId: entryId,
       details: {
