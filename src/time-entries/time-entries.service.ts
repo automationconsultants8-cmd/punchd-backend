@@ -977,9 +977,8 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 }
   
 
-  async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
+ async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
     const where: any = { companyId, clockOutTime: { not: null } };
-
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
       if (filters.startDate) where.clockInTime.gte = filters.startDate;
@@ -994,11 +993,12 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       where,
       include: {
         user: { select: { id: true, name: true } },
+        job: { select: { id: true, name: true } },
       },
     });
 
+    // Aggregate by worker
     const byWorker: Record<string, any> = {};
-
     for (const entry of entries) {
       const workerId = entry.userId;
       if (!byWorker[workerId]) {
@@ -1014,7 +1014,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
           totalPay: 0,
         };
       }
-
       const rate = entry.hourlyRate ? Number(entry.hourlyRate) : 0;
       byWorker[workerId].regularMinutes += entry.regularMinutes || 0;
       byWorker[workerId].overtimeMinutes += entry.overtimeMinutes || 0;
@@ -1025,6 +1024,35 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       byWorker[workerId].totalPay += entry.laborCost ? Number(entry.laborCost) : 0;
     }
 
+    // Aggregate by job site
+    const byJobSite: Record<string, any> = {};
+    for (const entry of entries) {
+      const jobId = entry.jobId || 'unassigned';
+      const jobName = entry.job?.name || 'Unassigned';
+      
+      if (!byJobSite[jobId]) {
+        byJobSite[jobId] = {
+          id: jobId,
+          name: jobName,
+          hours: 0,
+          cost: 0,
+          entries: 0,
+          regularHours: 0,
+          overtimeHours: 0,
+          doubleTimeHours: 0,
+        };
+      }
+      
+      const totalMinutes = (entry.regularMinutes || 0) + (entry.overtimeMinutes || 0) + (entry.doubleTimeMinutes || 0);
+      byJobSite[jobId].hours += totalMinutes / 60;
+      byJobSite[jobId].cost += entry.laborCost ? Number(entry.laborCost) : 0;
+      byJobSite[jobId].entries += 1;
+      byJobSite[jobId].regularHours += (entry.regularMinutes || 0) / 60;
+      byJobSite[jobId].overtimeHours += (entry.overtimeMinutes || 0) / 60;
+      byJobSite[jobId].doubleTimeHours += (entry.doubleTimeMinutes || 0) / 60;
+    }
+
+    // Calculate totals
     const totals = {
       regularHours: 0,
       overtimeHours: 0,
@@ -1045,8 +1073,12 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       totals.totalPay += worker.totalPay;
     }
 
+    // Sort byJobSite by cost descending
+    const sortedByJobSite = Object.values(byJobSite).sort((a: any, b: any) => b.cost - a.cost);
+
     return {
       byWorker: Object.values(byWorker),
+      byJobSite: sortedByJobSite,
       totals,
     };
   }
