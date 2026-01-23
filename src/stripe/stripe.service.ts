@@ -454,7 +454,7 @@ export class StripeService {
     let trialExpired = false;
 
     // Check trial status
-    if (company.subscriptionTier === 'trial' && company.trialEndsAt) {
+    if ((company.subscriptionTier === 'trial' || company.subscriptionStatus === 'trial') && company.trialEndsAt) {
       const trialEnd = new Date(company.trialEndsAt);
       const msRemaining = trialEnd.getTime() - now.getTime();
       daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
