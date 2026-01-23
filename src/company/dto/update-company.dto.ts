@@ -28,6 +28,11 @@ export class UpdateCompanyDto {
   zip?: string;
 
   @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  timezone?: string;
+
+  @ApiPropertyOptional()
   @IsNumber()
   @IsOptional()
   @Min(0)
