@@ -338,6 +338,16 @@ getMyTimeEntries(
     );
   }
 
+  @Patch(':id/archive')
+@ApiOperation({ summary: 'Archive a time entry' })
+archive(
+  @Param('id') id: string,
+  @Request() req,
+  @Body() dto: { reason?: string },
+) {
+  return this.timeEntriesService.archiveEntry(id, req.user.companyId, req.user.id, dto.reason);
+}
+
   @Post('bulk-approve')
   @ApiOperation({ summary: 'Approve multiple time entries at once' })
   bulkApprove(
