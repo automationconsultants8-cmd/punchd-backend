@@ -541,15 +541,12 @@ private async check7thConsecutiveDay(
   const currentDay = new Date(clockInTime);
   currentDay.setHours(0, 0, 0, 0);
 
-  const dayOfWeek = currentDay.getDay();
-  const weekStart = new Date(currentDay);
-  weekStart.setDate(weekStart.getDate() - dayOfWeek);
-
+  // Check the 6 days BEFORE today (not week-based)
   let consecutiveDays = 0;
-
-  for (let i = 0; i < dayOfWeek; i++) {
-    const checkDate = new Date(weekStart);
-    checkDate.setDate(checkDate.getDate() + i);
+  
+  for (let i = 1; i <= 6; i++) {
+    const checkDate = new Date(currentDay);
+    checkDate.setDate(checkDate.getDate() - i);
     const checkDateEnd = new Date(checkDate);
     checkDateEnd.setHours(23, 59, 59, 999);
 
@@ -565,11 +562,13 @@ private async check7thConsecutiveDay(
     if (workedThatDay) {
       consecutiveDays++;
     } else {
-      consecutiveDays = 0;
+      // If any of the previous 6 days was not worked, not 7th consecutive
+      return false;
     }
   }
 
-  return consecutiveDays >= 6;
+  // If all 6 previous days were worked, today is the 7th consecutive day
+  return consecutiveDays === 6;
 }
 
   async startBreak(userId: string) {
