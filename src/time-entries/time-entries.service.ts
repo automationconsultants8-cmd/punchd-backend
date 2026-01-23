@@ -2080,7 +2080,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     await this.auditService.log({
       companyId,
       userId: archivedById,
-      action: 'TIME_ENTRY_ARCHIVED',
+      action: 'TIME_ENTRY_EDITED',
       targetType: 'TIME_ENTRY',
       targetId: entryId,
       details: {
