@@ -1,9 +1,11 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
 import { ShiftTemplatesService } from './shift-templates.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { SettingsGuard, RequireSetting } from '../common/settings.guard';
 
 @Controller('shift-templates')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SettingsGuard)
+@RequireSetting('shiftScheduling')
 export class ShiftTemplatesController {
   constructor(private service: ShiftTemplatesService) {}
 
