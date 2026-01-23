@@ -1,9 +1,9 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, Res, UseGuards, Request, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Res, UseGuards, Request, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PayPeriodsService } from './pay-periods.service';
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Res, UseGuards, Request, ForbiddenException } from '@nestjs/common';
+
 
 @ApiTags('Pay Periods')
 @Controller('pay-periods')
