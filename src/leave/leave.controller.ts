@@ -14,10 +14,12 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { LeaveService } from './leave.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { LeaveType } from '@prisma/client';
+import { SettingsGuard, RequireSetting } from '../common/settings.guard';
 
 @ApiTags('leave')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, SettingsGuard)
+@RequireSetting('leaveManagement')
 @Controller('leave')
 export class LeaveController {
   constructor(private readonly leaveService: LeaveService) {}
