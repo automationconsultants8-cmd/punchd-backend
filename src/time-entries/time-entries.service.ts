@@ -2040,5 +2040,57 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     return updatedEntry;
   }
+  /**
+   * Archive a time entry (soft delete)
+   */
+  async archiveEntry(
+    entryId: string,
+    companyId: string,
+    archivedById: string,
+    reason?: string,
+  ) {
+    const entry = await this.prisma.timeEntry.findFirst({
+      where: { id: entryId, companyId },
+      include: { user: { select: { id: true, name: true } } },
+    });
+
+    if (!entry) {
+      throw new NotFoundException('Time entry not found');
+    }
+
+    // Check if already archived
+    if ((entry as any).isArchived) {
+      throw new BadRequestException('Entry is already archived');
+    }
+
+    const updated = await this.prisma.timeEntry.update({
+      where: { id: entryId },
+      data: {
+        isArchived: true,
+        archivedAt: new Date(),
+        archivedById,
+        archiveReason: reason || null,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+      },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId: archivedById,
+      action: 'TIME_ENTRY_ARCHIVED',
+      targetType: 'TIME_ENTRY',
+      targetId: entryId,
+      details: {
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        reason,
+      },
+    });
+
+    return updated;
+  }
 }
 
