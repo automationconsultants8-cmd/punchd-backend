@@ -356,6 +356,11 @@ model TimeEntry {
   isOnBreak         Boolean   @default(false)
   workerType        WorkerType?
 
+  isArchived       Boolean   @default(false)
+  archivedAt       DateTime?
+  archivedById     String?
+  archiveReason    String?
+
   approvalStatus    ApprovalStatus @default(PENDING)
   approvedById      String?
   approvedAt        DateTime?
