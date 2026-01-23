@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger'
 import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PayPeriodsService } from './pay-periods.service';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Res, UseGuards, Request, ForbiddenException } from '@nestjs/common';
 
 @ApiTags('Pay Periods')
 @Controller('pay-periods')
@@ -132,6 +133,19 @@ export class PayPeriodsController {
   async markAsExported(@Request() req, @Param('id') id: string) {
     this.checkAccess(req);
     return this.payPeriodsService.markAsExported(
+      req.user.companyId,
+      req.user.userId,
+      id,
+    );
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete a pay period' })
+  async deletePayPeriod(@Request() req, @Param('id') id: string) {
+    if (req.user.role !== 'OWNER') {
+      throw new ForbiddenException('Only owners can delete pay periods');
+    }
+    return this.payPeriodsService.deletePayPeriod(
       req.user.companyId,
       req.user.userId,
       id,
