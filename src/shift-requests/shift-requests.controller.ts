@@ -5,11 +5,13 @@ import { ShiftRequestsService } from './shift-requests.service';
 import { ShiftRequestStatus, ShiftRequestType } from '@prisma/client';
 import { RequiresFeature } from '../features/feature.decorator';
 import { FeatureGuard } from '../features/feature.guard';
+import { SettingsGuard, RequireSetting } from '../common/settings.guard';
 
 @ApiTags('Shift Requests')
 @Controller('shift-requests')
-@UseGuards(JwtAuthGuard, FeatureGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard, SettingsGuard)
 @RequiresFeature('SHIFT_REQUESTS')
+@RequireSetting('shiftScheduling')
 @ApiBearerAuth()
 export class ShiftRequestsController {
   constructor(private readonly shiftRequestsService: ShiftRequestsService) {}
