@@ -114,6 +114,10 @@ export class PayPeriodsService {
   // CALCULATE PAY PERIOD DATES
   // ============================================
 
+  // ============================================
+  // CALCULATE PAY PERIOD DATES (FIXED - UTC)
+  // ============================================
+
   calculatePayPeriodDates(
     type: PayPeriodType,
     startDay: number,
@@ -121,84 +125,93 @@ export class PayPeriodsService {
     customDays: number | null,
     forDate: Date = new Date(),
   ): { startDate: Date; endDate: Date } {
+    // Use UTC for all calculations to avoid timezone issues
     const date = new Date(forDate);
-    date.setHours(0, 0, 0, 0);
+    date.setUTCHours(12, 0, 0, 0); // Set to noon UTC to avoid boundary issues
 
     switch (type) {
       case 'WEEKLY': {
-        // Find the most recent startDay
-        const dayOfWeek = date.getDay();
+        // Find the most recent startDay (0=Sunday, 6=Saturday)
+        const dayOfWeek = date.getUTCDay();
         const diff = (dayOfWeek - startDay + 7) % 7;
         const startDate = new Date(date);
-        startDate.setDate(date.getDate() - diff);
+        startDate.setUTCDate(date.getUTCDate() - diff);
+        startDate.setUTCHours(0, 0, 0, 0);
         const endDate = new Date(startDate);
-        endDate.setDate(startDate.getDate() + 6);
+        endDate.setUTCDate(startDate.getUTCDate() + 6);
+        endDate.setUTCHours(23, 59, 59, 999);
         return { startDate, endDate };
       }
 
       case 'BIWEEKLY': {
         if (!anchorDate) throw new BadRequestException('Biweekly requires anchor date');
         const anchor = new Date(anchorDate);
-        anchor.setHours(0, 0, 0, 0);
+        anchor.setUTCHours(12, 0, 0, 0); // Noon UTC
         
-        // Calculate weeks since anchor
-        const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-        const weeksSinceAnchor = Math.floor((date.getTime() - anchor.getTime()) / msPerWeek);
-        const biweekPeriod = Math.floor(weeksSinceAnchor / 2);
+        // Calculate days since anchor
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const daysSinceAnchor = Math.floor((date.getTime() - anchor.getTime()) / msPerDay);
+        const biweekPeriod = Math.floor(daysSinceAnchor / 14);
         
         const startDate = new Date(anchor);
-        startDate.setDate(anchor.getDate() + (biweekPeriod * 14));
+        startDate.setUTCDate(anchor.getUTCDate() + (biweekPeriod * 14));
+        startDate.setUTCHours(0, 0, 0, 0);
+        
         const endDate = new Date(startDate);
-        endDate.setDate(startDate.getDate() + 13);
+        endDate.setUTCDate(startDate.getUTCDate() + 13);
+        endDate.setUTCHours(23, 59, 59, 999);
+        
         return { startDate, endDate };
       }
 
       case 'SEMIMONTHLY': {
-        // First period: startDay to 15th (or end of month if startDay > 15)
-        // Second period: 16th to startDay-1 of next month
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const dayOfMonth = date.getDate();
+        const year = date.getUTCFullYear();
+        const month = date.getUTCMonth();
+        const dayOfMonth = date.getUTCDate();
 
         let startDate: Date;
         let endDate: Date;
 
         if (dayOfMonth < 16) {
-          // First half
-          startDate = new Date(year, month, startDay);
-          endDate = new Date(year, month, 15);
+          // First half: startDay to 15th
+          startDate = new Date(Date.UTC(year, month, startDay, 0, 0, 0, 0));
+          endDate = new Date(Date.UTC(year, month, 15, 23, 59, 59, 999));
         } else {
-          // Second half
-          startDate = new Date(year, month, 16);
-          // End on startDay-1 of next month, or last day if startDay is 1
+          // Second half: 16th to startDay-1 of next month
+          startDate = new Date(Date.UTC(year, month, 16, 0, 0, 0, 0));
           if (startDay === 1) {
-            endDate = new Date(year, month + 1, 0); // Last day of current month
+            // End on last day of current month
+            endDate = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999));
           } else {
-            endDate = new Date(year, month + 1, startDay - 1);
+            endDate = new Date(Date.UTC(year, month + 1, startDay - 1, 23, 59, 59, 999));
           }
         }
         return { startDate, endDate };
       }
 
       case 'MONTHLY': {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const dayOfMonth = date.getDate();
+        const year = date.getUTCFullYear();
+        const month = date.getUTCMonth();
+        const dayOfMonth = date.getUTCDate();
 
         let startDate: Date;
         let endDate: Date;
 
         if (dayOfMonth >= startDay) {
-          startDate = new Date(year, month, startDay);
-          endDate = new Date(year, month + 1, startDay - 1);
+          startDate = new Date(Date.UTC(year, month, startDay, 0, 0, 0, 0));
+          // End on startDay-1 of next month
+          if (startDay === 1) {
+            endDate = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999)); // Last day of current month
+          } else {
+            endDate = new Date(Date.UTC(year, month + 1, startDay - 1, 23, 59, 59, 999));
+          }
         } else {
-          startDate = new Date(year, month - 1, startDay);
-          endDate = new Date(year, month, startDay - 1);
-        }
-        
-        // Handle edge case for months with fewer days
-        if (endDate.getDate() !== startDay - 1 && startDay > 1) {
-          endDate = new Date(year, month + 1, 0); // Last day of month
+          startDate = new Date(Date.UTC(year, month - 1, startDay, 0, 0, 0, 0));
+          if (startDay === 1) {
+            endDate = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999)); // Last day of previous month
+          } else {
+            endDate = new Date(Date.UTC(year, month, startDay - 1, 23, 59, 59, 999));
+          }
         }
         
         return { startDate, endDate };
@@ -207,16 +220,20 @@ export class PayPeriodsService {
       case 'CUSTOM': {
         if (!anchorDate || !customDays) throw new BadRequestException('Custom requires anchor and days');
         const anchor = new Date(anchorDate);
-        anchor.setHours(0, 0, 0, 0);
+        anchor.setUTCHours(12, 0, 0, 0);
         
         const msPerDay = 24 * 60 * 60 * 1000;
         const daysSinceAnchor = Math.floor((date.getTime() - anchor.getTime()) / msPerDay);
         const periodNumber = Math.floor(daysSinceAnchor / customDays);
         
         const startDate = new Date(anchor);
-        startDate.setDate(anchor.getDate() + (periodNumber * customDays));
+        startDate.setUTCDate(anchor.getUTCDate() + (periodNumber * customDays));
+        startDate.setUTCHours(0, 0, 0, 0);
+        
         const endDate = new Date(startDate);
-        endDate.setDate(startDate.getDate() + customDays - 1);
+        endDate.setUTCDate(startDate.getUTCDate() + customDays - 1);
+        endDate.setUTCHours(23, 59, 59, 999);
+        
         return { startDate, endDate };
       }
 
