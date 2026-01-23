@@ -284,7 +284,9 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
   return timeEntry;
 }
 
-  async clockOut(userId: string, companyId: string, dto: ClockOutDto) {
+  // REPLACE the clockOut method in time-entries.service.ts with this:
+
+async clockOut(userId: string, companyId: string, dto: ClockOutDto) {
   const activeEntry = await this.prisma.timeEntry.findFirst({
     where: { userId, companyId, clockOutTime: null },
     include: { job: true },
@@ -298,13 +300,30 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
     throw new BadRequestException('You are currently on break. Please end your break before clocking out.');
   }
 
+  // Get company settings and toggles
+  const company = await this.prisma.company.findUnique({
+    where: { id: companyId },
+    select: { settings: true, overtimeSettings: true },
+  });
+
+  const { getToggles } = await import('../common/feature-toggles');
+  const toggles = getToggles(company?.settings || {});
+
   // Get user with workerType
   const user = await this.prisma.user.findUnique({
     where: { id: userId },
     select: { workerTypes: true, hourlyRate: true },
   });
 
-  const isHourly = !user?.workerTypes?.length || user.workerTypes.includes('HOURLY');
+  // Determine if worker should get OT calculations
+  const workerTypes = user?.workerTypes || [];
+  const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
+  const isContractor = workerTypes.includes('CONTRACTOR');
+  const isVolunteer = workerTypes.includes('VOLUNTEER');
+  const isSalaried = workerTypes.includes('SALARIED');
+  
+  // NO OT for contractors, volunteers, or salaried workers
+  const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
 
   const clockInTime = new Date(activeEntry.clockInTime);
   const clockOutTime = new Date();
@@ -321,15 +340,19 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
     laborCost: null as number | null,
   };
 
-  // Only calculate OT for hourly workers
-  if (isHourly) {
+  // Only calculate OT if enabled and worker type qualifies
+  if (shouldCalculateOT) {
     overtimeCalc = await this.calculateOvertimeForEntry(
       userId,
       companyId,
       activeEntry.jobId,
       clockInTime,
       workMinutes,
+      toggles, // Pass toggles for 7th day rule check
     );
+  } else if (overtimeCalc.hourlyRate) {
+    // No OT, just calculate straight pay
+    overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
   }
 
   const updatedEntry = await this.prisma.timeEntry.update({
@@ -351,8 +374,8 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
     },
   });
 
-  // Only check break compliance for hourly workers
-  if (isHourly) {
+  // Only check break compliance if toggle is ON and worker is hourly
+  if (toggles.breakTracking && isHourly && !isContractor && !isVolunteer) {
     try {
       const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
       const complianceResult = this.breakComplianceService.checkCompliance(
@@ -814,69 +837,106 @@ private async check7thConsecutiveDay(
     return results;
   }
 
-  async createManualEntry(companyId: string, createdById: string, dto: CreateManualEntryDto) {
-    const user = await this.prisma.user.findFirst({
-      where: { id: dto.userId, companyId },
+  // REPLACE the createManualEntry method in time-entries.service.ts with this:
+
+async createManualEntry(companyId: string, createdById: string, dto: CreateManualEntryDto) {
+  const user = await this.prisma.user.findFirst({
+    where: { id: dto.userId, companyId },
+  });
+
+  if (!user) {
+    throw new NotFoundException('Worker not found');
+  }
+
+  if (dto.jobId) {
+    const job = await this.prisma.job.findFirst({
+      where: { id: dto.jobId, companyId },
     });
-
-    if (!user) {
-      throw new NotFoundException('Worker not found');
+    if (!job) {
+      throw new NotFoundException('Job not found');
     }
+  }
 
-    if (dto.jobId) {
-      const job = await this.prisma.job.findFirst({
-        where: { id: dto.jobId, companyId },
-      });
-      if (!job) {
-        throw new NotFoundException('Job not found');
-      }
-    }
+  // Get company settings and toggles
+  const company = await this.prisma.company.findUnique({
+    where: { id: companyId },
+    select: { settings: true },
+  });
 
-// Store as Pacific time (UTC-8)
-const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00`);
-const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00`);
+  const { getToggles } = await import('../common/feature-toggles');
+  const toggles = getToggles(company?.settings || {});
+
+  // Determine if worker should get OT calculations
+  const workerTypes = (user as any).workerTypes || [];
+  const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
+  const isContractor = workerTypes.includes('CONTRACTOR');
+  const isVolunteer = workerTypes.includes('VOLUNTEER');
+  const isSalaried = workerTypes.includes('SALARIED');
+  
+  // NO OT for contractors, volunteers, or salaried workers
+  const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
+
+  // Store as Pacific time (UTC-8)
+  const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00`);
+  const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00`);
     
-    if (clockOutTime <= clockInTime) {
-      throw new BadRequestException('Clock out time must be after clock in time');
-    }
+  if (clockOutTime <= clockInTime) {
+    throw new BadRequestException('Clock out time must be after clock in time');
+  }
 
-    const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
-    const workMinutes = totalMinutes - (dto.breakMinutes || 0);
+  const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
+  const workMinutes = totalMinutes - (dto.breakMinutes || 0);
 
-    const overtimeCalc = await this.calculateOvertimeForEntry(
+  let overtimeCalc = {
+    regularMinutes: workMinutes,
+    overtimeMinutes: 0,
+    doubleTimeMinutes: 0,
+    hourlyRate: (user as any).hourlyRate ? Number((user as any).hourlyRate) : null,
+    laborCost: null as number | null,
+  };
+
+  // Only calculate OT if enabled and worker type qualifies
+  if (shouldCalculateOT) {
+    overtimeCalc = await this.calculateOvertimeForEntry(
       dto.userId,
       companyId,
       dto.jobId || null,
       clockInTime,
       workMinutes,
+      toggles, // Pass toggles for 7th day rule check
     );
+  } else if (overtimeCalc.hourlyRate) {
+    // No OT, just calculate straight pay
+    overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
+  }
 
-    const entry = await this.prisma.timeEntry.create({
-      data: {
-        companyId,
-        userId: dto.userId,
-        jobId: dto.jobId || null,
-        clockInTime,
-        clockOutTime,
-        durationMinutes: workMinutes,
-        breakMinutes: dto.breakMinutes || 0,
-        notes: dto.notes,
-        approvalStatus: 'PENDING',
-        approvedById: null,
-        approvedAt: null,
-        regularMinutes: overtimeCalc.regularMinutes,
-        overtimeMinutes: overtimeCalc.overtimeMinutes,
-        doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
-        hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
-        laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
-      },
-      include: {
-        user: { select: { id: true, name: true, phone: true } },
-        job: true,
-      },
-    });
+  const entry = await this.prisma.timeEntry.create({
+    data: {
+      companyId,
+      userId: dto.userId,
+      jobId: dto.jobId || null,
+      clockInTime,
+      clockOutTime,
+      durationMinutes: workMinutes,
+      breakMinutes: dto.breakMinutes || 0,
+      notes: dto.notes,
+      approvalStatus: 'PENDING',
+      approvedById: null,
+      approvedAt: null,
+      regularMinutes: overtimeCalc.regularMinutes,
+      overtimeMinutes: overtimeCalc.overtimeMinutes,
+      doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
+      hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
+      laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
+    },
+    include: {
+      user: { select: { id: true, name: true, phone: true } },
+      job: true,
+    },
+  });
 
-    // Check break compliance for manual entry
+  // Only check break compliance if toggle is ON and worker type qualifies
+  if (toggles.breakTracking && isHourly && !isContractor && !isVolunteer) {
     try {
       const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
       const complianceResult = this.breakComplianceService.checkCompliance(
@@ -898,21 +958,23 @@ const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00`);
     } catch (err) {
       console.error('Break compliance check error:', err);
     }
+  }
 
-    await this.auditService.log({
-      companyId,
-      userId: createdById,
-      action: 'TIME_ENTRY_APPROVED',
-      targetType: 'TIME_ENTRY',
-      targetId: entry.id,
-      details: {
-        type: 'MANUAL_ENTRY',
-        workerName: user.name,
-        durationMinutes: workMinutes,
-      },
-    });
+  await this.auditService.log({
+    companyId,
+    userId: createdById,
+    action: 'TIME_ENTRY_APPROVED',
+    targetType: 'TIME_ENTRY',
+    targetId: entry.id,
+    details: {
+      type: 'MANUAL_ENTRY',
+      workerName: user.name,
+      durationMinutes: workMinutes,
+    },
+  });
 
-    return entry;
+  return entry;
+}
   }
 
   async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
