@@ -750,4 +750,59 @@ export class PayPeriodsService {
 
     return payPeriod;
   }
+  // ============================================
+  // DELETE PAY PERIOD
+  // ============================================
+
+  async deletePayPeriod(companyId: string, deletedById: string, payPeriodId: string) {
+    const payPeriod = await this.prisma.payPeriod.findFirst({
+      where: { id: payPeriodId, companyId },
+    });
+
+    if (!payPeriod) {
+      throw new NotFoundException('Pay period not found');
+    }
+
+    if (payPeriod.status === 'LOCKED' || payPeriod.status === 'EXPORTED') {
+      throw new BadRequestException('Cannot delete a locked or exported pay period');
+    }
+
+    // Check if there are time entries linked to this pay period
+    const linkedEntries = await this.prisma.timeEntry.count({
+      where: { payPeriodId },
+    });
+
+    if (linkedEntries > 0) {
+      // Unlink the entries instead of blocking delete
+      await this.prisma.timeEntry.updateMany({
+        where: { payPeriodId },
+        data: { payPeriodId: null },
+      });
+    }
+
+    // Delete the pay period
+    await this.prisma.payPeriod.delete({
+      where: { id: payPeriodId },
+    });
+
+    // Audit log
+    await this.prisma.auditLog.create({
+      data: {
+        companyId,
+        userId: deletedById,
+        action: 'COMPANY_SETTINGS_UPDATED',
+        targetType: 'PayPeriod',
+        targetId: payPeriodId,
+        details: { 
+          action: 'deleted',
+          startDate: payPeriod.startDate, 
+          endDate: payPeriod.endDate,
+        },
+      },
+    });
+
+    console.log(`🗑️ Pay period deleted: ${payPeriod.startDate.toDateString()} - ${payPeriod.endDate.toDateString()}`);
+
+    return { success: true, deleted: payPeriodId };
+  }
 }
