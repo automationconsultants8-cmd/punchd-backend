@@ -34,20 +34,20 @@ export class TimeEntriesController {
   }
 
   @Get('mine')
-@ApiOperation({ summary: 'Get current user time entries' })
-@ApiQuery({ name: 'startDate', required: false, type: String })
-@ApiQuery({ name: 'endDate', required: false, type: String })
-getMyTimeEntries(
-  @Request() req,
-  @Query('startDate') startDate?: string,
-  @Query('endDate') endDate?: string,
-) {
-  return this.timeEntriesService.getTimeEntries(req.user.companyId, {
-    userId: req.user.userId,
-    startDate: startDate ? new Date(startDate) : undefined,
-    endDate: endDate ? new Date(endDate) : undefined,
-  });
-}
+  @ApiOperation({ summary: 'Get current user time entries' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  getMyTimeEntries(
+    @Request() req,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.timeEntriesService.getTimeEntries(req.user.companyId, {
+      userId: req.user.userId,
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+  }
 
   @Post('start-break')
   @ApiOperation({ summary: 'Start a break' })
@@ -66,6 +66,42 @@ getMyTimeEntries(
   getAllForCompany(@Request() req) {
     return this.timeEntriesService.getTimeEntries(req.user.companyId, {});
   }
+
+  // ============================================
+  // NEW: ARCHIVED ENTRIES ENDPOINTS
+  // ============================================
+
+  @Get('archived')
+  @ApiOperation({ summary: 'Get archived time entries' })
+  @ApiQuery({ name: 'userId', required: false, type: String })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  getArchivedEntries(
+    @Request() req,
+    @Query('userId') userId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.timeEntriesService.getArchivedEntries(req.user.companyId, {
+      userId,
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+  }
+
+  @Post(':id/restore')
+  @ApiOperation({ summary: 'Restore an archived time entry' })
+  @ApiParam({ name: 'id', description: 'Time entry ID' })
+  restoreEntry(
+    @Param('id') id: string,
+    @Request() req,
+  ) {
+    return this.timeEntriesService.restoreEntry(id, req.user.companyId, req.user.userId);
+  }
+
+  // ============================================
+  // EXPORT ENDPOINTS
+  // ============================================
 
   @Get('export/excel')
   @ApiOperation({ summary: 'Export time entries to Excel' })
@@ -339,14 +375,15 @@ getMyTimeEntries(
   }
 
   @Patch(':id/archive')
-@ApiOperation({ summary: 'Archive a time entry' })
-archive(
-  @Param('id') id: string,
-  @Request() req,
-  @Body() dto: { reason?: string },
-) {
-  return this.timeEntriesService.archiveEntry(id, req.user.companyId, req.user.id, dto.reason);
-}
+  @ApiOperation({ summary: 'Archive a time entry' })
+  @ApiParam({ name: 'id', description: 'Time entry ID' })
+  archive(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() dto: { reason?: string },
+  ) {
+    return this.timeEntriesService.archiveEntry(id, req.user.companyId, req.user.userId, dto.reason);
+  }
 
   @Post('bulk-approve')
   @ApiOperation({ summary: 'Approve multiple time entries at once' })
