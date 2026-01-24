@@ -1,5 +1,12 @@
-import { IsString, IsOptional, IsNumber, IsDateString, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsDateString, Min, Max, IsEnum } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+enum WorkerType {
+  HOURLY = 'HOURLY',
+  SALARIED = 'SALARIED',
+  CONTRACTOR = 'CONTRACTOR',
+  VOLUNTEER = 'VOLUNTEER',
+}
 
 export class CreateManualEntryDto {
   @ApiProperty({ description: 'Worker ID' })
@@ -46,4 +53,9 @@ export class CreateManualEntryDto {
   @IsString()
   @IsOptional()
   timezone?: string;
+
+  @ApiPropertyOptional({ description: 'Worker type for this entry', enum: WorkerType })
+  @IsEnum(WorkerType)
+  @IsOptional()
+  workerType?: WorkerType;
 }
