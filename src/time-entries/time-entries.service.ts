@@ -1045,7 +1045,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
   }
 
-  const entry = await this.prisma.timeEntry.create({
+   const entry = await this.prisma.timeEntry.create({
     data: {
       companyId,
       userId: dto.userId,
@@ -1054,6 +1054,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       clockOutTime,
       durationMinutes: workMinutes,
       breakMinutes: dto.breakMinutes || 0,
+      restBreaksTaken: dto.restBreaksTaken || 0,
       notes: dto.notes,
       approvalStatus: 'PENDING',
       approvedById: null,
@@ -1077,7 +1078,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       const complianceResult = this.breakComplianceService.checkCompliance(
         workMinutes,
         dto.breakMinutes || 0,
-        0, // rest break count - manual entries don't track this
+        dto.restBreaksTaken || 0,
         breakSettings,
       );
 
