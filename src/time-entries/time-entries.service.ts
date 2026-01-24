@@ -2215,7 +2215,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
   /**
    * Archive a time entry (soft delete)
    */
-  async archiveEntry(
+ async archiveEntry(
     entryId: string,
     companyId: string,
     archivedById: string,
@@ -2234,6 +2234,16 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     if ((entry as any).isArchived) {
       throw new BadRequestException('Entry is already archived');
     }
+
+    // Delete associated break violations
+    await this.prisma.breakViolation.deleteMany({
+      where: { timeEntryId: entryId },
+    });
+
+    // Delete associated break violations
+    await this.prisma.breakViolation.deleteMany({
+      where: { timeEntryId: entryId },
+    });
 
     const updated = await this.prisma.timeEntry.update({
       where: { id: entryId },
