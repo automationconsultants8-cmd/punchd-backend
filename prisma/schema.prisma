@@ -353,6 +353,8 @@ model TimeEntry {
   breakStartTime    DateTime?
   breakEndTime      DateTime?
   breakMinutes      Int       @default(0)
+  restBreaksTaken   Int?
+  mealBreaksTaken   Int?
   isOnBreak         Boolean   @default(false)
   workerType        WorkerType?
 
