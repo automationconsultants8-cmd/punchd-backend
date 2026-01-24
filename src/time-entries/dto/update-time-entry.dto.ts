@@ -16,6 +16,12 @@ export class UpdateTimeEntryDto {
   breakMinutes?: number;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(10)
+  restBreaksTaken?: number;
+
+  @IsOptional()
   @IsString()
   jobId?: string;
 
