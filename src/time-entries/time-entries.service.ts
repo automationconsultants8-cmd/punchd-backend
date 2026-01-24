@@ -1011,9 +1011,12 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
   // NO OT for contractors, volunteers, or salaried workers
   const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
 
-  // Store as Pacific time (UTC-8)
-  const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00`);
-  const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00`);
+  // Get timezone offset (default to Pacific)
+  const tz = dto.timezone || 'America/Los_Angeles';
+  const tzOffset = tz === 'America/Los_Angeles' ? '-08:00' : '+00:00';
+  
+  const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00${tzOffset}`);
+  const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00${tzOffset}`);
     
   if (clockOutTime <= clockInTime) {
     throw new BadRequestException('Clock out time must be after clock in time');
@@ -2180,7 +2183,47 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
         approvedBy: { select: { id: true, name: true } },
       },
     });
+      // Re-check break compliance and update violations
+    if (durationMinutes && updatedEntry.clockOutTime) {
+      try {
+        // First delete existing violations for this entry
+        await this.prisma.breakViolation.deleteMany({
+          where: { timeEntryId: entryId },
+        });
 
+        // Re-check compliance with updated break values
+        const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
+        const complianceResult = this.breakComplianceService.checkCompliance(
+          durationMinutes,
+          breakMinutes,
+          restBreaksTaken,
+          breakSettings,
+        );
+
+        // Record new violations if not compliant
+        if (!complianceResult.isCompliant) {
+          const hourlyRate = updatedEntry.hourlyRate ? Number(updatedEntry.hourlyRate) : null;
+          await this.breakComplianceService.recordViolations(
+            companyId,
+            entry.userId,
+            entryId,
+            complianceResult.violations,
+            hourlyRate,
+          );
+        }
+
+        // Update break compliant flag
+        await this.prisma.timeEntry.update({
+          where: { id: entryId },
+          data: { breakCompliant: complianceResult.isCompliant },
+        });
+      } catch (err) {
+        console.error('Break compliance re-check error:', err);
+      }
+    }
+
+    // Create audit log entry
+    await this.auditService.log({
     // Create audit log entry
     await this.auditService.log({
       companyId,
