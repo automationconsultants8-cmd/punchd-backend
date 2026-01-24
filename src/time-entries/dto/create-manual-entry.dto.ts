@@ -41,4 +41,9 @@ export class CreateManualEntryDto {
   @IsString()
   @IsOptional()
   notes?: string;
+
+  @ApiPropertyOptional({ description: 'Timezone (e.g. America/Los_Angeles)' })
+  @IsString()
+  @IsOptional()
+  timezone?: string;
 }
