@@ -22,716 +22,603 @@ export class TimeEntriesService {
     private breakComplianceService: BreakComplianceService,
   ) {}
 
-async clockIn(userId: string, companyId: string, dto: ClockInDto) {
-  const activeEntry = await this.prisma.timeEntry.findFirst({
-    where: { userId, companyId, clockOutTime: null },
-  });
-
-  if (activeEntry) {
-    throw new BadRequestException('You are already clocked in. Please clock out first.');
-  }
-
-  // Get company with settings
-  const company = await this.prisma.company.findUnique({
-    where: { id: companyId },
-    select: { settings: true },
-  });
-
-  const { getToggles, isInLearningMode } = await import('../common/feature-toggles');
-  const toggles = getToggles(company?.settings || {});
-  const learningMode = isInLearningMode(toggles);
-
-  const user = await this.prisma.user.findUnique({
-    where: { id: userId },
-  });
-
-  let jobName = 'Unknown';
-  const flagReasons: string[] = [];
-  let jobId: string | null = null;
-
-  // Job-based tracking check
-  if (dto.entryType === 'JOB_TIME') {
-    if (!toggles.jobBasedTracking) {
-      throw new BadRequestException('Job-based tracking is disabled for this company.');
-    }
-
-    if (!dto.jobId) {
-      throw new BadRequestException('Job ID is required for job time entries');
-    }
-
-    const job = await this.jobsService.findOne(companyId, dto.jobId);
-    jobName = job.name;
-
-    // GPS Geofencing check
-    if (toggles.gpsGeofencing !== 'off') {
-      const [jobLat, jobLng] = job.geofenceCenter.split(',').map(Number);
-
-      const geofenceCheck = this.jobsService.isWithinGeofence(
-        jobLat,
-        jobLng,
-        job.geofenceRadiusMeters,
-        dto.latitude,
-        dto.longitude,
-      );
-
-      if (!geofenceCheck.isWithin) {
-        if (toggles.gpsGeofencing === 'strict') {
-          throw new ForbiddenException(
-            `Clock-in denied: You are ${geofenceCheck.distance}m from the job site. Must be within ${job.geofenceRadiusMeters}m.`,
-          );
-        } else {
-          // Soft mode - flag but allow
-          flagReasons.push(`GPS_OUTSIDE_GEOFENCE: ${geofenceCheck.distance}m from job site`);
-        }
-      }
-    }
-
-    jobId = dto.jobId;
-  }
-
-  // Early clock-in restriction check
-  if (toggles.earlyClockInRestriction !== 'off' && toggles.shiftScheduling) {
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
-
-    const todayShift = await this.prisma.shift.findFirst({
-      where: {
-        userId,
-        companyId,
-        shiftDate: { gte: todayStart, lte: todayEnd },
-        status: { notIn: ['CANCELLED', 'COMPLETED'] },
-      },
-      orderBy: { startTime: 'asc' },
+  async clockIn(userId: string, companyId: string, dto: ClockInDto) {
+    const activeEntry = await this.prisma.timeEntry.findFirst({
+      where: { userId, companyId, clockOutTime: null },
     });
 
-    if (todayShift) {
-      const shiftStartTime = new Date(todayShift.startTime);
-      const earliestClockIn = new Date(shiftStartTime.getTime() - (toggles.earlyClockInMinutes * 60 * 1000));
+    if (activeEntry) {
+      throw new BadRequestException('You are already clocked in. Please clock out first.');
+    }
 
-      if (now < earliestClockIn) {
-        const minutesUntilAllowed = Math.ceil((earliestClockIn.getTime() - now.getTime()) / 1000 / 60);
-        const shiftTimeStr = shiftStartTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { settings: true },
+    });
 
-        if (toggles.earlyClockInRestriction === 'strict') {
-          throw new ForbiddenException(
-            `You cannot clock in yet. Your shift starts at ${shiftTimeStr}. You can clock in ${toggles.earlyClockInMinutes} minutes before your shift (in ${minutesUntilAllowed} minutes).`
-          );
-        } else {
-          // Soft mode - flag but allow
-          flagReasons.push(`EARLY_CLOCK_IN: ${minutesUntilAllowed} minutes before allowed time`);
+    const { getToggles, isInLearningMode } = await import('../common/feature-toggles');
+    const toggles = getToggles(company?.settings || {});
+    const learningMode = isInLearningMode(toggles);
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    let jobName = 'Unknown';
+    const flagReasons: string[] = [];
+    let jobId: string | null = null;
+
+    if (dto.entryType === 'JOB_TIME') {
+      if (!toggles.jobBasedTracking) {
+        throw new BadRequestException('Job-based tracking is disabled for this company.');
+      }
+
+      if (!dto.jobId) {
+        throw new BadRequestException('Job ID is required for job time entries');
+      }
+
+      const job = await this.jobsService.findOne(companyId, dto.jobId);
+      jobName = job.name;
+
+      if (toggles.gpsGeofencing !== 'off') {
+        const [jobLat, jobLng] = job.geofenceCenter.split(',').map(Number);
+
+        const geofenceCheck = this.jobsService.isWithinGeofence(
+          jobLat,
+          jobLng,
+          job.geofenceRadiusMeters,
+          dto.latitude,
+          dto.longitude,
+        );
+
+        if (!geofenceCheck.isWithin) {
+          if (toggles.gpsGeofencing === 'strict') {
+            throw new ForbiddenException(
+              `Clock-in denied: You are ${geofenceCheck.distance}m from the job site. Must be within ${job.geofenceRadiusMeters}m.`,
+            );
+          } else {
+            flagReasons.push(`GPS_OUTSIDE_GEOFENCE: ${geofenceCheck.distance}m from job site`);
+          }
+        }
+      }
+
+      jobId = dto.jobId;
+    }
+
+    if (toggles.earlyClockInRestriction !== 'off' && toggles.shiftScheduling) {
+      const now = new Date();
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(now);
+      todayEnd.setHours(23, 59, 59, 999);
+
+      const todayShift = await this.prisma.shift.findFirst({
+        where: {
+          userId,
+          companyId,
+          shiftDate: { gte: todayStart, lte: todayEnd },
+          status: { notIn: ['CANCELLED', 'COMPLETED'] },
+        },
+        orderBy: { startTime: 'asc' },
+      });
+
+      if (todayShift) {
+        const shiftStartTime = new Date(todayShift.startTime);
+        const earliestClockIn = new Date(shiftStartTime.getTime() - (toggles.earlyClockInMinutes * 60 * 1000));
+
+        if (now < earliestClockIn) {
+          const minutesUntilAllowed = Math.ceil((earliestClockIn.getTime() - now.getTime()) / 1000 / 60);
+          const shiftTimeStr = shiftStartTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+          if (toggles.earlyClockInRestriction === 'strict') {
+            throw new ForbiddenException(
+              `You cannot clock in yet. Your shift starts at ${shiftTimeStr}. You can clock in ${toggles.earlyClockInMinutes} minutes before your shift (in ${minutesUntilAllowed} minutes).`
+            );
+          } else {
+            flagReasons.push(`EARLY_CLOCK_IN: ${minutesUntilAllowed} minutes before allowed time`);
+          }
         }
       }
     }
-  }
 
-  // Photo capture check
-  const photoUrl = toggles.photoCapture ? 'verified-locally' : null;
+    const photoUrl = toggles.photoCapture ? 'verified-locally' : null;
 
+    const timeEntry = await this.prisma.timeEntry.create({
+      data: {
+        companyId,
+        userId,
+        jobId,
+        clockInTime: new Date(),
+        clockInLocation: `${dto.latitude},${dto.longitude}`,
+        clockInPhotoUrl: photoUrl,
+        isFlagged: flagReasons.length > 0,
+        flagReason: flagReasons.length > 0 ? flagReasons.join(', ') : null,
+        approvalStatus: (flagReasons.length > 0 || dto.workerType === 'CONTRACTOR' || dto.workerType === 'VOLUNTEER') ? 'PENDING' : 'APPROVED',
+        workerType: dto.workerType as any,
+      },
+      include: {
+        job: true,
+        user: { select: { id: true, name: true, phone: true } },
+      },
+    });
 
-  
-  // Get auto-approve settings from company
-  const autoApproveSettings = (company?.settings as any)?.autoApprove || {
-    hourly: true,
-    salaried: true,
-    contractor: false,
-    volunteer: false,
-  };
-  
-  // Determine approval status based on worker type
-  let approvalStatus: 'PENDING' | 'APPROVED' = 'PENDING';
-  
-  if (entryWorkerType === 'HOURLY' && autoApproveSettings.hourly !== false) {
-    approvalStatus = 'APPROVED';
-  } else if (entryWorkerType === 'SALARIED' && autoApproveSettings.salaried !== false) {
-    approvalStatus = 'APPROVED';
-  } else if (entryWorkerType === 'CONTRACTOR' && autoApproveSettings.contractor === true) {
-    approvalStatus = 'APPROVED';
-  } else if (entryWorkerType === 'VOLUNTEER' && autoApproveSettings.volunteer === true) {
-    approvalStatus = 'APPROVED';
-  }
-
-  // Create the time entry
-  const timeEntry = await this.prisma.timeEntry.create({
-    data: {
-      companyId,
-      userId,
-      jobId,
-      clockInTime: new Date(),
-      clockInLocation: `${dto.latitude},${dto.longitude}`,
-      clockInPhotoUrl: photoUrl,
-      isFlagged: flagReasons.length > 0,
-      flagReason: flagReasons.length > 0 ? flagReasons.join(', ') : null,
-      approvalStatus: (flagReasons.length > 0 || dto.workerType === 'CONTRACTOR' || dto.workerType === 'VOLUNTEER') ? 'PENDING' : 'APPROVED',
-      workerType: dto.workerType as any,
-    },
-    include: {
-      job: true,
-      user: { select: { id: true, name: true, phone: true } },
-    },
-  });
-
-  // Face verification (only if enabled)
-  if (toggles.facialRecognition !== 'off' && toggles.photoCapture && dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
-    if (!user?.referencePhotoUrl) {
-      // First clock-in - store reference photo
-      console.log(`First clock-in for user ${userId}, storing reference photo`);
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { referencePhotoUrl: dto.photoUrl },
-      });
-    } else {
-      // Compare faces
-      try {
-        const confidence = await this.awsService.compareFaces(
-          user.referencePhotoUrl,
-          dto.photoUrl,
-        );
-
-        const matched = confidence >= 92;
-
-        await this.prisma.faceVerificationLog.create({
-          data: {
-            companyId,
-            userId,
-            timeEntryId: timeEntry.id,
-            submittedPhotoUrl: 'verified-locally',
-            confidenceScore: confidence,
-            matched,
-            rekognitionResponse: { confidence, matched },
-          },
+    if (toggles.facialRecognition !== 'off' && toggles.photoCapture && dto.photoUrl && dto.photoUrl !== 'placeholder.jpg') {
+      if (!user?.referencePhotoUrl) {
+        console.log(`First clock-in for user ${userId}, storing reference photo`);
+        await this.prisma.user.update({
+          where: { id: userId },
+          data: { referencePhotoUrl: dto.photoUrl },
         });
+      } else {
+        try {
+          const confidence = await this.awsService.compareFaces(
+            user.referencePhotoUrl,
+            dto.photoUrl,
+          );
 
-        if (!matched) {
-          if (toggles.facialRecognition === 'strict') {
-            // Strict mode - delete entry and block
-            await this.prisma.timeEntry.delete({
-              where: { id: timeEntry.id },
-            });
+          const matched = confidence >= 92;
 
-            // Send buddy punch alert (if enabled)
-            if (toggles.buddyPunchAlerts && !learningMode) {
-              const admins = await this.prisma.user.findMany({
-                where: {
-                  companyId,
-                  role: { in: ['ADMIN', 'OWNER'] },
-                  email: { not: null },
-                },
-                select: { email: true },
+          await this.prisma.faceVerificationLog.create({
+            data: {
+              companyId,
+              userId,
+              timeEntryId: timeEntry.id,
+              submittedPhotoUrl: 'verified-locally',
+              confidenceScore: confidence,
+              matched,
+              rekognitionResponse: { confidence, matched },
+            },
+          });
+
+          if (!matched) {
+            if (toggles.facialRecognition === 'strict') {
+              await this.prisma.timeEntry.delete({
+                where: { id: timeEntry.id },
               });
 
-              for (const admin of admins) {
-                if (admin.email) {
-                  try {
-                    await this.emailService.sendBuddyPunchAlert(
-                      admin.email,
-                      user.name,
-                      user.phone,
-                      jobName,
-                      confidence,
-                      'photo-not-stored',
-                    );
-                  } catch (emailErr) {
-                    console.error('Failed to send buddy punch alert:', emailErr);
+              if (toggles.buddyPunchAlerts && !learningMode) {
+                const admins = await this.prisma.user.findMany({
+                  where: {
+                    companyId,
+                    role: { in: ['ADMIN', 'OWNER'] },
+                    email: { not: null },
+                  },
+                  select: { email: true },
+                });
+
+                for (const admin of admins) {
+                  if (admin.email) {
+                    try {
+                      await this.emailService.sendBuddyPunchAlert(
+                        admin.email,
+                        user.name,
+                        user.phone,
+                        jobName,
+                        confidence,
+                        'photo-not-stored',
+                      );
+                    } catch (emailErr) {
+                      console.error('Failed to send buddy punch alert:', emailErr);
+                    }
                   }
                 }
               }
-            }
 
-            throw new ForbiddenException(
-              `Face verification failed. Confidence: ${confidence.toFixed(1)}%. Please try again or contact your supervisor.`,
-            );
-          } else {
-            // Soft mode - flag but allow
-            await this.prisma.timeEntry.update({
-              where: { id: timeEntry.id },
-              data: {
-                isFlagged: true,
-                flagReason: timeEntry.flagReason 
-                  ? `${timeEntry.flagReason}, FACE_MISMATCH: ${confidence.toFixed(1)}%`
-                  : `FACE_MISMATCH: ${confidence.toFixed(1)}%`,
-                approvalStatus: 'PENDING',
-              },
-            });
-
-            // Send buddy punch alert (if enabled and not in learning mode)
-            if (toggles.buddyPunchAlerts && !learningMode) {
-              const admins = await this.prisma.user.findMany({
-                where: {
-                  companyId,
-                  role: { in: ['ADMIN', 'OWNER'] },
-                  email: { not: null },
+              throw new ForbiddenException(
+                `Face verification failed. Confidence: ${confidence.toFixed(1)}%. Please try again or contact your supervisor.`,
+              );
+            } else {
+              await this.prisma.timeEntry.update({
+                where: { id: timeEntry.id },
+                data: {
+                  isFlagged: true,
+                  flagReason: timeEntry.flagReason 
+                    ? `${timeEntry.flagReason}, FACE_MISMATCH: ${confidence.toFixed(1)}%`
+                    : `FACE_MISMATCH: ${confidence.toFixed(1)}%`,
+                  approvalStatus: 'PENDING',
                 },
-                select: { email: true },
               });
 
-              for (const admin of admins) {
-                if (admin.email) {
-                  try {
-                    await this.emailService.sendBuddyPunchAlert(
-                      admin.email,
-                      user.name,
-                      user.phone,
-                      jobName,
-                      confidence,
-                      'photo-not-stored',
-                    );
-                  } catch (emailErr) {
-                    console.error('Failed to send buddy punch alert:', emailErr);
+              if (toggles.buddyPunchAlerts && !learningMode) {
+                const admins = await this.prisma.user.findMany({
+                  where: {
+                    companyId,
+                    role: { in: ['ADMIN', 'OWNER'] },
+                    email: { not: null },
+                  },
+                  select: { email: true },
+                });
+
+                for (const admin of admins) {
+                  if (admin.email) {
+                    try {
+                      await this.emailService.sendBuddyPunchAlert(
+                        admin.email,
+                        user.name,
+                        user.phone,
+                        jobName,
+                        confidence,
+                        'photo-not-stored',
+                      );
+                    } catch (emailErr) {
+                      console.error('Failed to send buddy punch alert:', emailErr);
+                    }
                   }
                 }
               }
             }
           }
-        }
-      } catch (err) {
-        if (err instanceof ForbiddenException) {
-          throw err;
-        }
+        } catch (err) {
+          if (err instanceof ForbiddenException) {
+            throw err;
+          }
 
-        console.error('Face verification error:', err);
-        await this.prisma.timeEntry.update({
-          where: { id: timeEntry.id },
-          data: {
-            isFlagged: true,
-            flagReason: 'FACE_VERIFICATION_ERROR',
-            approvalStatus: 'PENDING',
-          },
-        });
+          console.error('Face verification error:', err);
+          await this.prisma.timeEntry.update({
+            where: { id: timeEntry.id },
+            data: {
+              isFlagged: true,
+              flagReason: 'FACE_VERIFICATION_ERROR',
+              approvalStatus: 'PENDING',
+            },
+          });
+        }
       }
     }
+
+    return timeEntry;
   }
 
-  return timeEntry;
-}
-
-  // REPLACE the clockOut method in time-entries.service.ts with this:
-
-async clockOut(userId: string, companyId: string, dto: ClockOutDto) {
-  const activeEntry = await this.prisma.timeEntry.findFirst({
-    where: { userId, companyId, clockOutTime: null },
-    include: { job: true },
-  });
-
-  if (!activeEntry) {
-    throw new BadRequestException('No active clock-in found. Please clock in first.');
-  }
-
-  if (activeEntry.isOnBreak) {
-    throw new BadRequestException('You are currently on break. Please end your break before clocking out.');
-  }
-
-  // Get company settings and toggles
-  const company = await this.prisma.company.findUnique({
-    where: { id: companyId },
-    select: { settings: true, overtimeSettings: true },
-  });
-
-  const { getToggles } = await import('../common/feature-toggles');
-  const toggles = getToggles(company?.settings || {});
-
-  // Get user with workerType
-  const user = await this.prisma.user.findUnique({
-    where: { id: userId },
-    select: { workerTypes: true, hourlyRate: true },
-  });
-
-  // Determine if worker should get OT calculations
-  const workerTypes = user?.workerTypes || [];
-  const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
-  const isContractor = workerTypes.includes('CONTRACTOR');
-  const isVolunteer = workerTypes.includes('VOLUNTEER');
-  const isSalaried = workerTypes.includes('SALARIED');
-  
-  // NO OT for contractors, volunteers, or salaried workers
-  const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
-
-  const clockInTime = new Date(activeEntry.clockInTime);
-  const clockOutTime = new Date();
-  const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
-  const workMinutes = totalMinutes - (activeEntry.breakMinutes || 0);
-
-  const photoUrl = 'verified-locally';
-
-  let overtimeCalc = {
-    regularMinutes: workMinutes,
-    overtimeMinutes: 0,
-    doubleTimeMinutes: 0,
-    hourlyRate: user?.hourlyRate ? Number(user.hourlyRate) : null,
-    laborCost: null as number | null,
-  };
-
-  // Only calculate OT if enabled and worker type qualifies
-  if (shouldCalculateOT) {
-    overtimeCalc = await this.calculateOvertimeForEntry(
-      userId,
-      companyId,
-      activeEntry.jobId,
-      clockInTime,
-      workMinutes,
-      toggles, // Pass toggles for 7th day rule check
-    );
-  } else if (overtimeCalc.hourlyRate) {
-    // No OT, just calculate straight pay
-    overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
-  }
-
-  const updatedEntry = await this.prisma.timeEntry.update({
-    where: { id: activeEntry.id },
-    data: {
-      clockOutTime,
-      clockOutLocation: `${dto.latitude},${dto.longitude}`,
-      clockOutPhotoUrl: photoUrl,
-      durationMinutes: workMinutes,
-      regularMinutes: overtimeCalc.regularMinutes,
-      overtimeMinutes: overtimeCalc.overtimeMinutes,
-      doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
-      hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
-      laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
-    },
-    include: {
-      job: true,
-      user: { select: { id: true, name: true, phone: true } },
-    },
-  });
-
-  // Only check break compliance if toggle is ON and worker is hourly
-  if (toggles.breakTracking && isHourly && !isContractor && !isVolunteer) {
-    try {
-      const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
-      const complianceResult = this.breakComplianceService.checkCompliance(
-        workMinutes,
-        activeEntry.breakMinutes || 0,
-        0,
-        breakSettings,
-      );
-
-      if (!complianceResult.isCompliant) {
-        await this.breakComplianceService.recordViolations(
-          companyId,
-          userId,
-          activeEntry.id,
-          complianceResult.violations,
-          overtimeCalc.hourlyRate,
-        );
-      }
-    } catch (err) {
-      console.error('Break compliance check error:', err);
-    }
-  }
-
-  return updatedEntry;
-}
-  
-// REPLACE the entire calculateOvertimeForEntry method AND check7thConsecutiveDay method
-// Find these methods (around line 381-550) and replace with this code
-
-private async calculateOvertimeForEntry(
-  userId: string,
-  companyId: string,
-  jobId: string | null,
-  clockInTime: Date,
-  workMinutes: number,
-  toggles?: any,
-) {
-  const user = await this.prisma.user.findUnique({
-    where: { id: userId },
-    select: { hourlyRate: true },
-  });
-
-  let hourlyRate: number | null = null;
-
-  // Get job-specific rate or default
-  if (jobId) {
-    const jobRate = await this.prisma.workerJobRate.findFirst({
-      where: { userId, jobId },
+  async clockOut(userId: string, companyId: string, dto: ClockOutDto) {
+    const activeEntry = await this.prisma.timeEntry.findFirst({
+      where: { userId, companyId, clockOutTime: null },
+      include: { job: true },
     });
-    if (jobRate) {
-      hourlyRate = Number(jobRate.hourlyRate);
-    } else {
-      const job = await this.prisma.job.findUnique({
-        where: { id: jobId },
-        select: { defaultHourlyRate: true },
-      });
-      if (job?.defaultHourlyRate) {
-        hourlyRate = Number(job.defaultHourlyRate);
-      }
-    }
-  }
 
-  if (!hourlyRate && user?.hourlyRate) {
-    hourlyRate = Number(user.hourlyRate);
-  }
-
-  // Get company overtime settings
-  const company = await this.prisma.company.findUnique({
-    where: { id: companyId },
-    select: { overtimeSettings: true },
-  });
-
-  const otSettings = (company?.overtimeSettings as any) || {};
-  const dailyRegularLimit = otSettings.dailyOtThreshold ?? 480; // 8 hours in minutes
-  const dailyOvertimeLimit = otSettings.dailyDtThreshold ?? 720; // 12 hours in minutes
-  const weeklyRegularLimit = otSettings.weeklyOtThreshold ?? 2400; // 40 hours in minutes
-  const otMultiplier = otSettings.otMultiplier ?? 1.5;
-  const dtMultiplier = otSettings.dtMultiplier ?? 2.0;
-
-  // ============================================
-  // CALCULATE DAILY HOURS (same day before this entry)
-  // ============================================
-  const dayStart = new Date(clockInTime);
-  dayStart.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(clockInTime);
-  dayEnd.setHours(23, 59, 59, 999);
-
-  const dailyEntries = await this.prisma.timeEntry.findMany({
-    where: {
-      userId,
-      companyId,
-      clockInTime: { gte: dayStart, lte: dayEnd },
-      clockOutTime: { not: null },
-      isArchived: false,
-    },
-    select: { durationMinutes: true },
-  });
-
-  const previousDailyMinutes = dailyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
-  const totalDailyMinutes = previousDailyMinutes + workMinutes;
-
-  // ============================================
-  // CALCULATE WEEKLY HOURS (same workweek before this entry)
-  // Workweek starts on Sunday (configurable via otSettings.workweekStartDay)
-  // ============================================
-  const workweekStartDay = otSettings.workweekStartDay ?? 0; // 0 = Sunday
-  const currentDayOfWeek = clockInTime.getDay();
-  const daysFromWeekStart = (currentDayOfWeek - workweekStartDay + 7) % 7;
-  
-  const weekStart = new Date(clockInTime);
-  weekStart.setDate(weekStart.getDate() - daysFromWeekStart);
-  weekStart.setHours(0, 0, 0, 0);
-
-  const weeklyEntries = await this.prisma.timeEntry.findMany({
-    where: {
-      userId,
-      companyId,
-      clockInTime: { gte: weekStart, lt: dayStart }, // Before today (same week)
-      clockOutTime: { not: null },
-      isArchived: false,
-    },
-    select: { durationMinutes: true },
-  });
-  
-  const previousWeeklyMinutes = weeklyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
-  // Total weekly = previous days this week + previous today + this entry
-  const totalWeeklyMinutes = previousWeeklyMinutes + previousDailyMinutes + workMinutes;
-
-  // ============================================
-  // CHECK FOR 7TH CONSECUTIVE DAY
-  // ============================================
-  let is7thConsecutiveDay = false;
-  if (toggles?.seventhDayOtRule !== false) { // Default ON for California compliance
-    is7thConsecutiveDay = await this.check7thConsecutiveDay(userId, companyId, clockInTime);
-  }
-
-  // ============================================
-  // CALCULATE OT/DT BASED ON CALIFORNIA RULES
-  // California requires the calculation most favorable to the worker
-  // ============================================
-  let regularMinutes = workMinutes;
-  let overtimeMinutes = 0;
-  let doubleTimeMinutes = 0;
-
-  if (is7thConsecutiveDay) {
-    // ============================================
-    // RULE: 7TH CONSECUTIVE DAY (California Labor Code 510)
-    // - First 8 hours: 1.5x overtime
-    // - Over 8 hours: 2x double time
-    // ============================================
-    if (totalDailyMinutes > dailyRegularLimit) {
-      // Some hours are double time
-      const dtMinutes = totalDailyMinutes - dailyRegularLimit;
-      doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
-      overtimeMinutes = workMinutes - doubleTimeMinutes;
-      regularMinutes = 0;
-    } else {
-      // All hours are overtime (1.5x)
-      overtimeMinutes = workMinutes;
-      regularMinutes = 0;
-    }
-  } else {
-    // ============================================
-    // CALCULATE DAILY OT/DT
-    // ============================================
-    let dailyRegular = workMinutes;
-    let dailyOT = 0;
-    let dailyDT = 0;
-
-    if (totalDailyMinutes > dailyOvertimeLimit) {
-      // Over 12 hours - double time kicks in
-      const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
-      dailyDT = Math.min(dtMinutes, workMinutes);
-
-      const remainingWork = workMinutes - dailyDT;
-      if (previousDailyMinutes < dailyOvertimeLimit) {
-        const otMinutesInRange = Math.min(
-          dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit),
-          remainingWork
-        );
-        dailyOT = Math.max(0, otMinutesInRange);
-        dailyRegular = remainingWork - dailyOT;
-      } else {
-        dailyRegular = 0;
-        dailyOT = remainingWork;
-      }
-    } else if (totalDailyMinutes > dailyRegularLimit) {
-      // Over 8 hours - overtime kicks in
-      if (previousDailyMinutes >= dailyRegularLimit) {
-        dailyOT = workMinutes;
-        dailyRegular = 0;
-      } else {
-        dailyRegular = Math.max(0, dailyRegularLimit - previousDailyMinutes);
-        dailyOT = workMinutes - dailyRegular;
-      }
+    if (!activeEntry) {
+      throw new BadRequestException('No active clock-in found. Please clock in first.');
     }
 
-    // ============================================
-    // CALCULATE WEEKLY OT (Federal FLSA + California)
-    // Over 40 hours in a workweek = 1.5x overtime
-    // ============================================
-    let weeklyRegular = workMinutes;
-    let weeklyOT = 0;
+    if (activeEntry.isOnBreak) {
+      throw new BadRequestException('You are currently on break. Please end your break before clocking out.');
+    }
 
-    const previousWeeklyTotal = previousWeeklyMinutes + previousDailyMinutes;
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { settings: true, overtimeSettings: true },
+    });
+
+    const { getToggles } = await import('../common/feature-toggles');
+    const toggles = getToggles(company?.settings || {});
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { workerTypes: true, hourlyRate: true },
+    });
+
+    const workerTypes = user?.workerTypes || [];
+    const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
+    const isContractor = workerTypes.includes('CONTRACTOR');
+    const isVolunteer = workerTypes.includes('VOLUNTEER');
+    const isSalaried = workerTypes.includes('SALARIED');
     
-    if (totalWeeklyMinutes > weeklyRegularLimit) {
-      // Over 40 hours this week
-      if (previousWeeklyTotal >= weeklyRegularLimit) {
-        // Already over 40, all new hours are OT
-        weeklyOT = workMinutes;
-        weeklyRegular = 0;
-      } else {
-        // Crossing the 40-hour threshold
-        weeklyRegular = Math.max(0, weeklyRegularLimit - previousWeeklyTotal);
-        weeklyOT = workMinutes - weeklyRegular;
-      }
-    }
+    const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
 
-    // ============================================
-    // APPLY MOST FAVORABLE CALCULATION TO WORKER
-    // California requires using whichever gives more OT
-    // ============================================
-    const dailyOTTotal = dailyOT + dailyDT; // DT counts as "better than OT"
-    const weeklyOTTotal = weeklyOT;
+    const clockInTime = new Date(activeEntry.clockInTime);
+    const clockOutTime = new Date();
+    const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
+    const workMinutes = totalMinutes - (activeEntry.breakMinutes || 0);
 
-    // Calculate effective OT value (DT is worth more)
-    const dailyOTValue = dailyOT * otMultiplier + dailyDT * dtMultiplier;
-    const weeklyOTValue = weeklyOT * otMultiplier;
+    const photoUrl = 'verified-locally';
 
-    if (dailyOTValue >= weeklyOTValue) {
-      // Daily calculation is more favorable (or equal)
-      regularMinutes = dailyRegular;
-      overtimeMinutes = dailyOT;
-      doubleTimeMinutes = dailyDT;
-    } else {
-      // Weekly calculation is more favorable
-      // Note: Weekly OT doesn't have double time, only 1.5x
-      regularMinutes = weeklyRegular;
-      overtimeMinutes = weeklyOT;
-      doubleTimeMinutes = 0;
-    }
+    let overtimeCalc = {
+      regularMinutes: workMinutes,
+      overtimeMinutes: 0,
+      doubleTimeMinutes: 0,
+      hourlyRate: user?.hourlyRate ? Number(user.hourlyRate) : null,
+      laborCost: null as number | null,
+    };
 
-    // ============================================
-    // EDGE CASE: Combine daily DT with weekly OT
-    // If daily DT applies (>12 hrs) but weekly would also apply,
-    // ensure DT still gets applied since it's higher rate
-    // ============================================
-    if (dailyDT > 0 && weeklyOT > 0) {
-      // Keep daily DT, apply weekly OT to remaining regular
-      doubleTimeMinutes = dailyDT;
-      const remainingAfterDT = workMinutes - dailyDT;
-      
-      // Check if remaining would be OT under weekly rule
-      const weeklyMinutesBeforeThisEntry = previousWeeklyMinutes + previousDailyMinutes;
-      const weeklyMinutesAfterDT = weeklyMinutesBeforeThisEntry + remainingAfterDT;
-      
-      if (weeklyMinutesAfterDT > weeklyRegularLimit) {
-        const weeklyOTForRemaining = Math.min(
-          weeklyMinutesAfterDT - weeklyRegularLimit,
-          remainingAfterDT
-        );
-        // Also check daily OT for this remaining time
-        const dailyOTForRemaining = dailyOT;
-        
-        // Use the higher of weekly or daily OT for remaining time
-        overtimeMinutes = Math.max(weeklyOTForRemaining, dailyOTForRemaining);
-        regularMinutes = remainingAfterDT - overtimeMinutes;
-      } else {
-        overtimeMinutes = dailyOT;
-        regularMinutes = dailyRegular;
-      }
-    }
-  }
-
-  // ============================================
-  // CALCULATE LABOR COST
-  // ============================================
-  let laborCost: number | null = null;
-  if (hourlyRate) {
-    const regularPay = (regularMinutes / 60) * hourlyRate;
-    const overtimePay = (overtimeMinutes / 60) * hourlyRate * otMultiplier;
-    const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * dtMultiplier;
-    laborCost = regularPay + overtimePay + doubleTimePay;
-  }
-
-  return {
-    regularMinutes,
-    overtimeMinutes,
-    doubleTimeMinutes,
-    hourlyRate,
-    laborCost,
-  };
-}
-
-// ============================================
-// HELPER: CHECK FOR 7TH CONSECUTIVE WORK DAY
-// California Labor Code Section 510
-// ============================================
-private async check7thConsecutiveDay(
-  userId: string,
-  companyId: string,
-  clockInTime: Date,
-): Promise<boolean> {
-  const currentDay = new Date(clockInTime);
-  currentDay.setHours(0, 0, 0, 0);
-
-  // Check the 6 days BEFORE today
-  for (let i = 1; i <= 6; i++) {
-    const checkDate = new Date(currentDay);
-    checkDate.setDate(checkDate.getDate() - i);
-    const checkDateEnd = new Date(checkDate);
-    checkDateEnd.setHours(23, 59, 59, 999);
-
-    const workedThatDay = await this.prisma.timeEntry.findFirst({
-      where: {
+    if (shouldCalculateOT) {
+      overtimeCalc = await this.calculateOvertimeForEntry(
         userId,
         companyId,
-        clockInTime: { gte: checkDate, lte: checkDateEnd },
-        durationMinutes: { gt: 0 },
-        isArchived: false,
+        activeEntry.jobId,
+        clockInTime,
+        workMinutes,
+        toggles,
+      );
+    } else if (overtimeCalc.hourlyRate) {
+      overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
+    }
+
+    const updatedEntry = await this.prisma.timeEntry.update({
+      where: { id: activeEntry.id },
+      data: {
+        clockOutTime,
+        clockOutLocation: `${dto.latitude},${dto.longitude}`,
+        clockOutPhotoUrl: photoUrl,
+        durationMinutes: workMinutes,
+        regularMinutes: overtimeCalc.regularMinutes,
+        overtimeMinutes: overtimeCalc.overtimeMinutes,
+        doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
+        hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
+        laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
+      },
+      include: {
+        job: true,
+        user: { select: { id: true, name: true, phone: true } },
       },
     });
 
-    if (!workedThatDay) {
-      // If any of the previous 6 days was not worked, NOT 7th consecutive
-      return false;
+    if (toggles.breakTracking && isHourly && !isContractor && !isVolunteer) {
+      try {
+        const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
+        const complianceResult = this.breakComplianceService.checkCompliance(
+          workMinutes,
+          activeEntry.breakMinutes || 0,
+          0,
+          breakSettings,
+        );
+
+        if (!complianceResult.isCompliant) {
+          await this.breakComplianceService.recordViolations(
+            companyId,
+            userId,
+            activeEntry.id,
+            complianceResult.violations,
+            overtimeCalc.hourlyRate,
+          );
+        }
+      } catch (err) {
+        console.error('Break compliance check error:', err);
+      }
     }
+
+    return updatedEntry;
   }
 
-  // All 6 previous days were worked, today is the 7th consecutive day
-  return true;
-}
+  private async calculateOvertimeForEntry(
+    userId: string,
+    companyId: string,
+    jobId: string | null,
+    clockInTime: Date,
+    workMinutes: number,
+    toggles?: any,
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { hourlyRate: true },
+    });
+
+    let hourlyRate: number | null = null;
+
+    if (jobId) {
+      const jobRate = await this.prisma.workerJobRate.findFirst({
+        where: { userId, jobId },
+      });
+      if (jobRate) {
+        hourlyRate = Number(jobRate.hourlyRate);
+      } else {
+        const job = await this.prisma.job.findUnique({
+          where: { id: jobId },
+          select: { defaultHourlyRate: true },
+        });
+        if (job?.defaultHourlyRate) {
+          hourlyRate = Number(job.defaultHourlyRate);
+        }
+      }
+    }
+
+    if (!hourlyRate && user?.hourlyRate) {
+      hourlyRate = Number(user.hourlyRate);
+    }
+
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { overtimeSettings: true },
+    });
+
+    const otSettings = (company?.overtimeSettings as any) || {};
+    const dailyRegularLimit = otSettings.dailyOtThreshold ?? 480;
+    const dailyOvertimeLimit = otSettings.dailyDtThreshold ?? 720;
+    const weeklyRegularLimit = otSettings.weeklyOtThreshold ?? 2400;
+    const otMultiplier = otSettings.otMultiplier ?? 1.5;
+    const dtMultiplier = otSettings.dtMultiplier ?? 2.0;
+
+    const dayStart = new Date(clockInTime);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(clockInTime);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    // FIXED: Added isArchived: false filter
+    const dailyEntries = await this.prisma.timeEntry.findMany({
+      where: {
+        userId,
+        companyId,
+        clockInTime: { gte: dayStart, lte: dayEnd },
+        clockOutTime: { not: null },
+        isArchived: false,
+      },
+      select: { durationMinutes: true },
+    });
+
+    const previousDailyMinutes = dailyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+    const totalDailyMinutes = previousDailyMinutes + workMinutes;
+
+    const workweekStartDay = otSettings.workweekStartDay ?? 0;
+    const currentDayOfWeek = clockInTime.getDay();
+    const daysFromWeekStart = (currentDayOfWeek - workweekStartDay + 7) % 7;
+    
+    const weekStart = new Date(clockInTime);
+    weekStart.setDate(weekStart.getDate() - daysFromWeekStart);
+    weekStart.setHours(0, 0, 0, 0);
+
+    // FIXED: Added isArchived: false filter
+    const weeklyEntries = await this.prisma.timeEntry.findMany({
+      where: {
+        userId,
+        companyId,
+        clockInTime: { gte: weekStart, lt: dayStart },
+        clockOutTime: { not: null },
+        isArchived: false,
+      },
+      select: { durationMinutes: true },
+    });
+
+    const previousWeeklyMinutes = weeklyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+    const totalWeeklyMinutes = previousWeeklyMinutes + previousDailyMinutes + workMinutes;
+
+    let is7thConsecutiveDay = false;
+    if (toggles?.seventhDayOtRule !== false) {
+      is7thConsecutiveDay = await this.check7thConsecutiveDay(userId, companyId, clockInTime);
+    }
+
+    let regularMinutes = workMinutes;
+    let overtimeMinutes = 0;
+    let doubleTimeMinutes = 0;
+
+    if (is7thConsecutiveDay) {
+      if (totalDailyMinutes > dailyRegularLimit) {
+        const dtMinutes = totalDailyMinutes - dailyRegularLimit;
+        doubleTimeMinutes = Math.min(dtMinutes, workMinutes);
+        overtimeMinutes = workMinutes - doubleTimeMinutes;
+        regularMinutes = 0;
+      } else {
+        overtimeMinutes = workMinutes;
+        regularMinutes = 0;
+      }
+    } else {
+      let dailyRegular = workMinutes;
+      let dailyOT = 0;
+      let dailyDT = 0;
+
+      if (totalDailyMinutes > dailyOvertimeLimit) {
+        const dtMinutes = totalDailyMinutes - dailyOvertimeLimit;
+        dailyDT = Math.min(dtMinutes, workMinutes);
+
+        const remainingWork = workMinutes - dailyDT;
+        if (previousDailyMinutes < dailyOvertimeLimit) {
+          const otMinutesInRange = Math.min(
+            dailyOvertimeLimit - Math.max(previousDailyMinutes, dailyRegularLimit),
+            remainingWork
+          );
+          dailyOT = Math.max(0, otMinutesInRange);
+          dailyRegular = remainingWork - dailyOT;
+        } else {
+          dailyRegular = 0;
+          dailyOT = remainingWork;
+        }
+      } else if (totalDailyMinutes > dailyRegularLimit) {
+        if (previousDailyMinutes >= dailyRegularLimit) {
+          dailyOT = workMinutes;
+          dailyRegular = 0;
+        } else {
+          dailyRegular = Math.max(0, dailyRegularLimit - previousDailyMinutes);
+          dailyOT = workMinutes - dailyRegular;
+        }
+      }
+
+      let weeklyRegular = workMinutes;
+      let weeklyOT = 0;
+
+      const previousWeeklyTotal = previousWeeklyMinutes + previousDailyMinutes;
+      
+      if (totalWeeklyMinutes > weeklyRegularLimit) {
+        if (previousWeeklyTotal >= weeklyRegularLimit) {
+          weeklyOT = workMinutes;
+          weeklyRegular = 0;
+        } else {
+          weeklyRegular = Math.max(0, weeklyRegularLimit - previousWeeklyTotal);
+          weeklyOT = workMinutes - weeklyRegular;
+        }
+      }
+
+      const dailyOTValue = dailyOT * otMultiplier + dailyDT * dtMultiplier;
+      const weeklyOTValue = weeklyOT * otMultiplier;
+
+      if (dailyOTValue >= weeklyOTValue) {
+        regularMinutes = dailyRegular;
+        overtimeMinutes = dailyOT;
+        doubleTimeMinutes = dailyDT;
+      } else {
+        regularMinutes = weeklyRegular;
+        overtimeMinutes = weeklyOT;
+        doubleTimeMinutes = 0;
+      }
+
+      if (dailyDT > 0 && weeklyOT > 0) {
+        doubleTimeMinutes = dailyDT;
+        const remainingAfterDT = workMinutes - dailyDT;
+        
+        const weeklyMinutesBeforeThisEntry = previousWeeklyMinutes + previousDailyMinutes;
+        const weeklyMinutesAfterDT = weeklyMinutesBeforeThisEntry + remainingAfterDT;
+        
+        if (weeklyMinutesAfterDT > weeklyRegularLimit) {
+          const weeklyOTForRemaining = Math.min(
+            weeklyMinutesAfterDT - weeklyRegularLimit,
+            remainingAfterDT
+          );
+          const dailyOTForRemaining = dailyOT;
+          
+          overtimeMinutes = Math.max(weeklyOTForRemaining, dailyOTForRemaining);
+          regularMinutes = remainingAfterDT - overtimeMinutes;
+        } else {
+          overtimeMinutes = dailyOT;
+          regularMinutes = dailyRegular;
+        }
+      }
+    }
+
+    let laborCost: number | null = null;
+    if (hourlyRate) {
+      const regularPay = (regularMinutes / 60) * hourlyRate;
+      const overtimePay = (overtimeMinutes / 60) * hourlyRate * otMultiplier;
+      const doubleTimePay = (doubleTimeMinutes / 60) * hourlyRate * dtMultiplier;
+      laborCost = regularPay + overtimePay + doubleTimePay;
+    }
+
+    return {
+      regularMinutes,
+      overtimeMinutes,
+      doubleTimeMinutes,
+      hourlyRate,
+      laborCost,
+    };
+  }
+
+  // FIXED: Added isArchived: false filter
+  private async check7thConsecutiveDay(
+    userId: string,
+    companyId: string,
+    clockInTime: Date,
+  ): Promise<boolean> {
+    const currentDay = new Date(clockInTime);
+    currentDay.setHours(0, 0, 0, 0);
+
+    for (let i = 1; i <= 6; i++) {
+      const checkDate = new Date(currentDay);
+      checkDate.setDate(checkDate.getDate() - i);
+      const checkDateEnd = new Date(checkDate);
+      checkDateEnd.setHours(23, 59, 59, 999);
+
+      const workedThatDay = await this.prisma.timeEntry.findFirst({
+        where: {
+          userId,
+          companyId,
+          clockInTime: { gte: checkDate, lte: checkDateEnd },
+          durationMinutes: { gt: 0 },
+          isArchived: false,
+        },
+      });
+
+      if (!workedThatDay) {
+        return false;
+      }
+    }
+
+    return true;
+  }
 
   async startBreak(userId: string) {
     const activeEntry = await this.prisma.timeEntry.findFirst({
@@ -791,6 +678,7 @@ private async check7thConsecutiveDay(
     });
   }
 
+  // FIXED: Added isArchived: false filter
   async getTimeEntries(companyId: string, filters?: any) {
     const where: any = { isArchived: false };
 
@@ -832,6 +720,7 @@ private async check7thConsecutiveDay(
     };
   }
 
+  // FIXED: Added isArchived: false filter
   async getPendingApprovals(companyId: string) {
     return this.prisma.timeEntry.findMany({
       where: {
@@ -848,6 +737,7 @@ private async check7thConsecutiveDay(
     });
   }
 
+  // FIXED: Added isArchived: false filter to all counts
   async getApprovalStats(companyId: string) {
     const [pending, approved, rejected] = await Promise.all([
       this.prisma.timeEntry.count({
@@ -999,180 +889,165 @@ private async check7thConsecutiveDay(
     return results;
   }
 
-  // REPLACE the createManualEntry method in time-entries.service.ts with this:
-
-async createManualEntry(companyId: string, createdById: string, dto: CreateManualEntryDto) {
-  const user = await this.prisma.user.findFirst({
-    where: { id: dto.userId, companyId },
-  });
-
-  if (!user) {
-    throw new NotFoundException('Worker not found');
-  }
-
-  if (dto.jobId) {
-    const job = await this.prisma.job.findFirst({
-      where: { id: dto.jobId, companyId },
+  // FIXED: Added auto-approve logic
+  async createManualEntry(companyId: string, createdById: string, dto: CreateManualEntryDto) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: dto.userId, companyId },
     });
-    if (!job) {
-      throw new NotFoundException('Job not found');
+
+    if (!user) {
+      throw new NotFoundException('Worker not found');
     }
-  }
 
-  // Get company settings and toggles
-  const company = await this.prisma.company.findUnique({
-    where: { id: companyId },
-    select: { settings: true },
-  });
-
-  const { getToggles } = await import('../common/feature-toggles');
-  const toggles = getToggles(company?.settings || {});
-
-  // Determine if worker should get OT calculations
-  const workerTypes = (user as any).workerTypes || [];
-  const workerTypes = (user as any).workerTypes || [];
-  
-  // ADD THIS BLOCK ↓↓↓
-  // Determine worker type for this entry
-  const entryWorkerType = dto.workerType || workerTypes[0] || 'HOURLY';
-  
-  // Get auto-approve settings from company
-  const autoApproveSettings = (company?.settings as any)?.autoApprove || {
-    hourly: true,
-    salaried: true,
-    contractor: false,
-    volunteer: false,
-  };
-  
-  // Determine approval status based on worker type
-  let approvalStatus: 'PENDING' | 'APPROVED' = 'PENDING';
-  
-  if (entryWorkerType === 'HOURLY' && autoApproveSettings.hourly !== false) {
-    approvalStatus = 'APPROVED';
-  } else if (entryWorkerType === 'SALARIED' && autoApproveSettings.salaried !== false) {
-    approvalStatus = 'APPROVED';
-  } else if (entryWorkerType === 'CONTRACTOR' && autoApproveSettings.contractor === true) {
-    approvalStatus = 'APPROVED';
-  } else if (entryWorkerType === 'VOLUNTEER' && autoApproveSettings.volunteer === true) {
-    approvalStatus = 'APPROVED';
-  }
-  // END OF BLOCK ↑↑↑
-
-  const entry = await this.prisma.timeEntry.create({
-  const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
-  const isContractor = workerTypes.includes('CONTRACTOR');
-  const isVolunteer = workerTypes.includes('VOLUNTEER');
-  const isSalaried = workerTypes.includes('SALARIED');
-  
-  // NO OT for contractors, volunteers, or salaried workers
-  const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
-
- // Store time as entered (no timezone conversion)
-  const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00.000Z`);
-  const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00.000Z`);
-  
-  if (clockOutTime <= clockInTime) {
-    throw new BadRequestException('Clock out time must be after clock in time');
-  }
-
-  const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
-  const workMinutes = totalMinutes - (dto.breakMinutes || 0);
-
-  let overtimeCalc = {
-    regularMinutes: workMinutes,
-    overtimeMinutes: 0,
-    doubleTimeMinutes: 0,
-    hourlyRate: (user as any).hourlyRate ? Number((user as any).hourlyRate) : null,
-    laborCost: null as number | null,
-  };
-
-  // Only calculate OT if enabled and worker type qualifies
-  if (shouldCalculateOT) {
-    overtimeCalc = await this.calculateOvertimeForEntry(
-      dto.userId,
-      companyId,
-      dto.jobId || null,
-      clockInTime,
-      workMinutes,
-      toggles, // Pass toggles for 7th day rule check
-    );
-  } else if (overtimeCalc.hourlyRate) {
-    // No OT, just calculate straight pay
-    overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
-  }
-
-   const entry = await this.prisma.timeEntry.create({
-    data: {
-      companyId,
-      userId: dto.userId,
-      jobId: dto.jobId || null,
-      clockInTime,
-      clockOutTime,
-      durationMinutes: workMinutes,
-      breakMinutes: dto.breakMinutes || 0,
-      restBreaksTaken: dto.restBreaksTaken || 0,
-      notes: dto.notes,
-      workerType: entryWorkerType as any,  // ADD THIS
-      approvalStatus,  // CHANGED - uses variable instead of hardcoded 'PENDING'
-      approvedById: approvalStatus === 'APPROVED' ? createdById : null,  // ADD THIS
-      approvedAt: approvalStatus === 'APPROVED' ? new Date() : null,  // ADD THIS
-      approvedById: null,
-      approvedAt: null,
-      regularMinutes: overtimeCalc.regularMinutes,
-      overtimeMinutes: overtimeCalc.overtimeMinutes,
-      doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
-      hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
-      laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
-    },
-    include: {
-      user: { select: { id: true, name: true, phone: true } },
-      job: true,
-    },
-  });
-
-  // Only check break compliance if toggle is ON and worker type qualifies
-  if (toggles.breakTracking && isHourly && !isContractor && !isVolunteer) {
-    try {
-      const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
-      const complianceResult = this.breakComplianceService.checkCompliance(
-        workMinutes,
-        dto.breakMinutes || 0,
-        dto.restBreaksTaken || 0,
-        breakSettings,
-      );
-
-      if (!complianceResult.isCompliant) {
-        await this.breakComplianceService.recordViolations(
-          companyId,
-          dto.userId,
-          entry.id,
-          complianceResult.violations,
-          overtimeCalc.hourlyRate,
-        );
+    if (dto.jobId) {
+      const job = await this.prisma.job.findFirst({
+        where: { id: dto.jobId, companyId },
+      });
+      if (!job) {
+        throw new NotFoundException('Job not found');
       }
-    } catch (err) {
-      console.error('Break compliance check error:', err);
     }
+
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { settings: true },
+    });
+
+    const { getToggles } = await import('../common/feature-toggles');
+    const toggles = getToggles(company?.settings || {});
+
+    const workerTypes = (user as any).workerTypes || [];
+    const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
+    const isContractor = workerTypes.includes('CONTRACTOR');
+    const isVolunteer = workerTypes.includes('VOLUNTEER');
+    const isSalaried = workerTypes.includes('SALARIED');
+    
+    const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
+
+    const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00.000Z`);
+    const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00.000Z`);
+    
+    if (clockOutTime <= clockInTime) {
+      throw new BadRequestException('Clock out time must be after clock in time');
+    }
+
+    const totalMinutes = Math.round((clockOutTime.getTime() - clockInTime.getTime()) / 1000 / 60);
+    const workMinutes = totalMinutes - (dto.breakMinutes || 0);
+
+    let overtimeCalc = {
+      regularMinutes: workMinutes,
+      overtimeMinutes: 0,
+      doubleTimeMinutes: 0,
+      hourlyRate: (user as any).hourlyRate ? Number((user as any).hourlyRate) : null,
+      laborCost: null as number | null,
+    };
+
+    if (shouldCalculateOT) {
+      overtimeCalc = await this.calculateOvertimeForEntry(
+        dto.userId,
+        companyId,
+        dto.jobId || null,
+        clockInTime,
+        workMinutes,
+        toggles,
+      );
+    } else if (overtimeCalc.hourlyRate) {
+      overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
+    }
+
+    // Determine worker type for this entry
+    const entryWorkerType = dto.workerType || workerTypes[0] || 'HOURLY';
+    
+    // Get auto-approve settings from company
+    const autoApproveSettings = (company?.settings as any)?.autoApprove || {
+      hourly: true,
+      salaried: true,
+      contractor: false,
+      volunteer: false,
+    };
+    
+    // Determine approval status based on worker type
+    let approvalStatus: 'PENDING' | 'APPROVED' = 'PENDING';
+    
+    if (entryWorkerType === 'HOURLY' && autoApproveSettings.hourly !== false) {
+      approvalStatus = 'APPROVED';
+    } else if (entryWorkerType === 'SALARIED' && autoApproveSettings.salaried !== false) {
+      approvalStatus = 'APPROVED';
+    } else if (entryWorkerType === 'CONTRACTOR' && autoApproveSettings.contractor === true) {
+      approvalStatus = 'APPROVED';
+    } else if (entryWorkerType === 'VOLUNTEER' && autoApproveSettings.volunteer === true) {
+      approvalStatus = 'APPROVED';
+    }
+
+    const entry = await this.prisma.timeEntry.create({
+      data: {
+        companyId,
+        userId: dto.userId,
+        jobId: dto.jobId || null,
+        clockInTime,
+        clockOutTime,
+        durationMinutes: workMinutes,
+        breakMinutes: dto.breakMinutes || 0,
+        restBreaksTaken: dto.restBreaksTaken || 0,
+        notes: dto.notes,
+        workerType: entryWorkerType as any,
+        approvalStatus: approvalStatus,
+        approvedById: approvalStatus === 'APPROVED' ? createdById : null,
+        approvedAt: approvalStatus === 'APPROVED' ? new Date() : null,
+        regularMinutes: overtimeCalc.regularMinutes,
+        overtimeMinutes: overtimeCalc.overtimeMinutes,
+        doubleTimeMinutes: overtimeCalc.doubleTimeMinutes,
+        hourlyRate: overtimeCalc.hourlyRate ? new Decimal(overtimeCalc.hourlyRate) : null,
+        laborCost: overtimeCalc.laborCost ? new Decimal(overtimeCalc.laborCost) : null,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+      },
+    });
+
+    if (toggles.breakTracking && isHourly && !isContractor && !isVolunteer) {
+      try {
+        const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
+        const complianceResult = this.breakComplianceService.checkCompliance(
+          workMinutes,
+          dto.breakMinutes || 0,
+          dto.restBreaksTaken || 0,
+          breakSettings,
+        );
+
+        if (!complianceResult.isCompliant) {
+          await this.breakComplianceService.recordViolations(
+            companyId,
+            dto.userId,
+            entry.id,
+            complianceResult.violations,
+            overtimeCalc.hourlyRate,
+          );
+        }
+      } catch (err) {
+        console.error('Break compliance check error:', err);
+      }
+    }
+
+    await this.auditService.log({
+      companyId,
+      userId: createdById,
+      action: 'TIME_ENTRY_APPROVED',
+      targetType: 'TIME_ENTRY',
+      targetId: entry.id,
+      details: {
+        type: 'MANUAL_ENTRY',
+        workerName: user.name,
+        durationMinutes: workMinutes,
+      },
+    });
+
+    return entry;
   }
 
-  await this.auditService.log({
-    companyId,
-    userId: createdById,
-    action: 'TIME_ENTRY_APPROVED',
-    targetType: 'TIME_ENTRY',
-    targetId: entry.id,
-    details: {
-      type: 'MANUAL_ENTRY',
-      workerName: user.name,
-      durationMinutes: workMinutes,
-    },
-  });
-
-  return entry;
-}
-  
-
- async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
+  // FIXED: Added isArchived: false filter
+  async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
     const where: any = { companyId, clockOutTime: { not: null }, isArchived: false };
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
@@ -1192,7 +1067,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       },
     });
 
-    // Aggregate by worker
     const byWorker: Record<string, any> = {};
     for (const entry of entries) {
       const workerId = entry.userId;
@@ -1219,7 +1093,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       byWorker[workerId].totalPay += entry.laborCost ? Number(entry.laborCost) : 0;
     }
 
-    // Aggregate by job site
     const byJobSite: Record<string, any> = {};
     for (const entry of entries) {
       const jobId = entry.jobId || 'unassigned';
@@ -1247,7 +1120,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       byJobSite[jobId].doubleTimeHours += (entry.doubleTimeMinutes || 0) / 60;
     }
 
-    // Calculate totals
     const totals = {
       regularHours: 0,
       overtimeHours: 0,
@@ -1268,7 +1140,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       totals.totalPay += worker.totalPay;
     }
 
-    // Sort byJobSite by cost descending
     const sortedByJobSite = Object.values(byJobSite).sort((a: any, b: any) => b.cost - a.cost);
 
     return {
@@ -1278,6 +1149,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     };
   }
 
+  // FIXED: Added isArchived: false filter
   async exportToExcel(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }): Promise<Buffer> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
@@ -1362,12 +1234,13 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     return Buffer.from(buffer);
   }
 
+  // FIXED: Added isArchived: false filter
   async exportToPdf(companyId: string, filters: { startDate?: Date; endDate?: Date; userId?: string }): Promise<Buffer> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
     });
 
-    const where: any = { companyId };
+    const where: any = { companyId, isArchived: false };
 
     if (filters.userId) {
       where.userId = filters.userId;
@@ -1579,6 +1452,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     });
   }
 
+  // FIXED: Added isArchived: false filter
   async exportToQuickBooks(
     companyId: string,
     filters: { startDate?: Date; endDate?: Date; format?: 'iif' | 'csv' }
@@ -1713,18 +1587,12 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     return lines.join('\r\n');
   }
 
-  // ============================================
-  // NEW PAYROLL EXPORT METHODS
-  // ============================================
-
-  /**
-   * Generic CSV Export - Works with any payroll system
-   */
+  // FIXED: Added isArchived: false filter
   async exportToCsv(
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
   ): Promise<string> {
-    const where: any = { companyId, clockOutTime: { not: null } };
+    const where: any = { companyId, clockOutTime: { not: null }, isArchived: false };
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
@@ -1747,7 +1615,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     const lines: string[] = [];
     
-    // Standard CSV header
     lines.push([
       'Employee Name',
       'Employee ID',
@@ -1804,10 +1671,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     return lines.join('\n');
   }
 
-  /**
-   * ADP Workforce Now Export Format
-   * Reference: ADP Time Import Template
-   */
+  // FIXED: Added isArchived: false filter
   async exportToAdp(
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
@@ -1835,7 +1699,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     const lines: string[] = [];
     
-    // ADP standard import headers
     lines.push([
       'Co Code',
       'Batch ID',
@@ -1851,7 +1714,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       'Memo Amount'
     ].join(','));
 
-    // Group entries by employee for ADP batch processing
     const byEmployee: Record<string, any[]> = {};
     for (const entry of entries) {
       const empId = entry.userId;
@@ -1873,33 +1735,30 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       const emp = empEntries[0]?.user;
       
       lines.push([
-        '', // Co Code - company fills in
-        '', // Batch ID - auto-generated
-        empId.substring(0, 6), // File # (employee ID, truncated)
+        '',
+        '',
+        empId.substring(0, 6),
         `"${emp?.name || 'Unknown'}"`,
         totalRegular.toFixed(2),
         totalOT.toFixed(2),
-        totalDT > 0 ? 'DT' : '', // Hours 3 Code for double time
+        totalDT > 0 ? 'DT' : '',
         totalDT > 0 ? totalDT.toFixed(2) : '',
-        '', // Earnings 3 Code
-        '', // Earnings 3 Amount
-        '', // Memo Code
-        ''  // Memo Amount
+        '',
+        '',
+        '',
+        ''
       ].join(','));
     }
 
     return lines.join('\n');
   }
 
-  /**
-   * Gusto Payroll Export Format
-   * Reference: Gusto Hours Import CSV
-   */
+  // FIXED: Added isArchived: false filter
   async exportToGusto(
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
   ): Promise<string> {
-    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED' };
+    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED', isArchived: false };
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
@@ -1922,7 +1781,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     const lines: string[] = [];
     
-    // Gusto CSV headers
     lines.push([
       'Employee First Name',
       'Employee Last Name',
@@ -1937,7 +1795,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       'Holiday Hours'
     ].join(','));
 
-    // Determine pay period from filters
     const periodStart = filters.startDate 
       ? new Date(filters.startDate).toLocaleDateString('en-US')
       : '';
@@ -1945,7 +1802,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       ? new Date(filters.endDate).toLocaleDateString('en-US')
       : '';
 
-    // Group entries by employee
     const byEmployee: Record<string, any[]> = {};
     for (const entry of entries) {
       const empId = entry.userId;
@@ -1972,30 +1828,27 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       lines.push([
         `"${firstName}"`,
         `"${lastName}"`,
-        '', // Email - not stored, leave blank
+        '',
         periodStart,
         periodEnd,
         totalRegular.toFixed(2),
         totalOT.toFixed(2),
         totalDT.toFixed(2),
-        '0.00', // PTO
-        '0.00', // Sick
-        '0.00'  // Holiday
+        '0.00',
+        '0.00',
+        '0.00'
       ].join(','));
     }
 
     return lines.join('\n');
   }
 
-  /**
-   * Paychex Flex Export Format
-   * Reference: Paychex Time Import Specification
-   */
+  // FIXED: Added isArchived: false filter
   async exportToPaychex(
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
   ): Promise<string> {
-    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED' };
+    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED', isArchived: false };
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
@@ -2018,7 +1871,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     const lines: string[] = [];
     
-    // Paychex CSV headers
     lines.push([
       'Worker ID',
       'Last Name',
@@ -2049,7 +1901,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
         return val || '';
       };
 
-      // Regular hours
       if ((entry.regularMinutes || 0) > 0) {
         const regHours = (entry.regularMinutes || 0) / 60;
         lines.push([
@@ -2057,16 +1908,15 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
           escapeCsv(lastName),
           escapeCsv(firstName),
           checkDate,
-          'REG', // Earnings Code
+          'REG',
           regHours.toFixed(2),
           rate.toFixed(2),
           (regHours * rate).toFixed(2),
-          '', // Department
+          '',
           escapeCsv(entry.job?.name || '')
         ].join(','));
       }
 
-      // Overtime hours (separate line)
       if ((entry.overtimeMinutes || 0) > 0) {
         const otHours = (entry.overtimeMinutes || 0) / 60;
         lines.push([
@@ -2074,7 +1924,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
           escapeCsv(lastName),
           escapeCsv(firstName),
           checkDate,
-          'OT', // Earnings Code
+          'OT',
           otHours.toFixed(2),
           (rate * 1.5).toFixed(2),
           (otHours * rate * 1.5).toFixed(2),
@@ -2083,7 +1933,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
         ].join(','));
       }
 
-      // Double time hours (separate line)
       if ((entry.doubleTimeMinutes || 0) > 0) {
         const dtHours = (entry.doubleTimeMinutes || 0) / 60;
         lines.push([
@@ -2091,7 +1940,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
           escapeCsv(lastName),
           escapeCsv(firstName),
           checkDate,
-          'DT', // Earnings Code
+          'DT',
           dtHours.toFixed(2),
           (rate * 2).toFixed(2),
           (dtHours * rate * 2).toFixed(2),
@@ -2103,21 +1952,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     return lines.join('\n');
   }
-  // ============================================
-  // ADD THIS METHOD TO time-entries.service.ts
-  // Place it before the final closing }
-  // ============================================
 
-  /**
-   * Update a time entry (for editing clock in/out, break, location, notes)
-   */
- // ============================================
-// REPLACE YOUR updateEntry AND archiveEntry METHODS WITH THESE
-// ============================================
-
-  /**
-   * Update a time entry (for editing clock in/out, break, location, notes)
-   */
   async updateEntry(
     entryId: string,
     companyId: string,
@@ -2131,7 +1966,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       notes?: string;
     },
   ) {
-    // Find existing entry
     const entry = await this.prisma.timeEntry.findFirst({
       where: { id: entryId, companyId },
       include: { user: true, job: true },
@@ -2141,12 +1975,10 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       throw new NotFoundException('Time entry not found');
     }
 
-    // Check if entry is locked
     if (entry.isLocked) {
       throw new BadRequestException('Cannot edit a locked time entry. Unlock the pay period first.');
     }
 
-    // Check if pay period is exported (for amendment flag)
     let isAmendedAfterExport = false;
     const payPeriod = await this.prisma.payPeriod.findFirst({
       where: {
@@ -2160,7 +1992,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       isAmendedAfterExport = true;
     }
 
-    // Store old values for audit
     const oldValues = {
       clockInTime: entry.clockInTime,
       clockOutTime: entry.clockOutTime,
@@ -2170,7 +2001,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       notes: entry.notes,
     };
 
-    // Parse times - use existing if not provided
     const clockInTime = updateData.clockInTime 
       ? new Date(updateData.clockInTime) 
       : entry.clockInTime;
@@ -2180,12 +2010,10 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     const breakMinutes = updateData.breakMinutes ?? entry.breakMinutes ?? 0;
     const restBreaksTaken = updateData.restBreaksTaken ?? entry.restBreaksTaken ?? 0;
 
-    // Validate clock out is after clock in
     if (clockOutTime && clockOutTime <= clockInTime) {
       throw new BadRequestException('Clock out time must be after clock in time');
     }
 
-    // Validate not more than 24 hours
     if (clockOutTime) {
       const diffMs = clockOutTime.getTime() - clockInTime.getTime();
       const diffHours = diffMs / (1000 * 60 * 60);
@@ -2194,7 +2022,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       }
     }
 
-    // Calculate duration and overtime
     let durationMinutes: number | null = null;
     let regularMinutes = 0;
     let overtimeMinutes = 0;
@@ -2206,7 +2033,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       const totalMinutes = Math.round(diffMs / (1000 * 60));
       durationMinutes = totalMinutes - breakMinutes;
 
-      // Recalculate overtime using existing method
       const jobId = updateData.jobId !== undefined ? updateData.jobId : entry.jobId;
       const overtimeCalc = await this.calculateOvertimeForEntry(
         entry.userId,
@@ -2222,7 +2048,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       laborCost = overtimeCalc.laborCost;
     }
 
-    // Update entry
     const updatedEntry = await this.prisma.timeEntry.update({
       where: { id: entryId },
       data: {
@@ -2247,15 +2072,12 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       },
     });
 
-    // Re-check break compliance and update violations
     if (durationMinutes && updatedEntry.clockOutTime) {
       try {
-        // First delete existing violations for this entry
         await this.prisma.breakViolation.deleteMany({
           where: { timeEntryId: entryId },
         });
 
-        // Re-check compliance with updated break values
         const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
         const complianceResult = this.breakComplianceService.checkCompliance(
           durationMinutes,
@@ -2264,7 +2086,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
           breakSettings,
         );
 
-        // Record new violations if not compliant
         if (!complianceResult.isCompliant) {
           const hourlyRate = updatedEntry.hourlyRate ? Number(updatedEntry.hourlyRate) : null;
           await this.breakComplianceService.recordViolations(
@@ -2276,7 +2097,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
           );
         }
 
-        // Update break compliant flag
         await this.prisma.timeEntry.update({
           where: { id: entryId },
           data: { breakCompliant: complianceResult.isCompliant },
@@ -2286,7 +2106,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       }
     }
 
-    // Create audit log entry
     await this.auditService.log({
       companyId,
       userId: editedById,
@@ -2320,11 +2139,64 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     return updatedEntry;
   }
 
-  /**
-   * Archive a time entry (soft delete)
-   */
- async getArchivedEntries(companyId: string, filters?: any) {
+  async archiveEntry(
+    entryId: string,
+    companyId: string,
+    archivedById: string,
+    reason?: string,
+  ) {
+    const entry = await this.prisma.timeEntry.findFirst({
+      where: { id: entryId, companyId },
+      include: { user: { select: { id: true, name: true } } },
+    });
+
+    if (!entry) {
+      throw new NotFoundException('Time entry not found');
+    }
+
+    if ((entry as any).isArchived) {
+      throw new BadRequestException('Entry is already archived');
+    }
+
+    // Delete violations when archiving
+    await this.prisma.breakViolation.deleteMany({
+      where: { timeEntryId: entryId },
+    });
+
+    const updated = await this.prisma.timeEntry.update({
+      where: { id: entryId },
+      data: {
+        isArchived: true,
+        archivedAt: new Date(),
+        archivedById,
+        archiveReason: reason || null,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+      },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId: archivedById,
+      action: 'TIME_ENTRY_ARCHIVED',
+      targetType: 'TIME_ENTRY',
+      targetId: entryId,
+      details: {
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        reason,
+      },
+    });
+
+    return updated;
+  }
+
+  // NEW: Get archived entries
+  async getArchivedEntries(companyId: string, filters?: any) {
     const where: any = { companyId, isArchived: true };
+
     if (filters?.userId) where.userId = filters.userId;
     if (filters?.startDate || filters?.endDate) {
       where.clockInTime = {};
@@ -2335,6 +2207,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
         where.clockInTime.lte = endDate;
       }
     }
+
     return this.prisma.timeEntry.findMany({
       where,
       include: {
@@ -2345,25 +2218,45 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     });
   }
 
+  // NEW: Restore archived entry
   async restoreEntry(entryId: string, companyId: string, restoredById: string) {
     const entry = await this.prisma.timeEntry.findFirst({
       where: { id: entryId, companyId, isArchived: true },
       include: { user: { select: { id: true, name: true } } },
     });
-    if (!entry) throw new NotFoundException('Archived entry not found');
+
+    if (!entry) {
+      throw new NotFoundException('Archived entry not found');
+    }
+
     const updated = await this.prisma.timeEntry.update({
       where: { id: entryId },
-      data: { isArchived: false, archivedAt: null, archivedById: null, archiveReason: null },
-      include: { user: { select: { id: true, name: true, phone: true } }, job: true },
+      data: {
+        isArchived: false,
+        archivedAt: null,
+        archivedById: null,
+        archiveReason: null,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+      },
     });
+
     await this.auditService.log({
-      companyId, userId: restoredById, action: 'TIME_ENTRY_ARCHIVED',
-      targetType: 'TIME_ENTRY', targetId: entryId,
-      details: { action: 'RESTORED', workerName: entry.user?.name, workerId: entry.userId, previousApprovalStatus: entry.approvalStatus },
+      companyId,
+      userId: restoredById,
+      action: 'TIME_ENTRY_ARCHIVED',
+      targetType: 'TIME_ENTRY',
+      targetId: entryId,
+      details: {
+        action: 'RESTORED',
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        previousApprovalStatus: entry.approvalStatus,
+      },
     });
+
     return updated;
   }
-
-
-
-
+}
