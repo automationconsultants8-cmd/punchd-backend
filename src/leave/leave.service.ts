@@ -197,7 +197,7 @@ export class LeaveService {
   }
 
   // ============================================
-  // APPLY TO ALL WORKERS
+  // APPLY TO ALL ELIGIBLE EMPLOYEES
   // ============================================
 
   async applyPolicyToAllWorkers(policyId: string, companyId: string, updatedById: string) {
@@ -209,21 +209,31 @@ export class LeaveService {
       throw new NotFoundException('Leave policy not found');
     }
 
-    // Get all active workers in the company
-    const workers = await this.prisma.user.findMany({
-      where: { companyId, isActive: true, role: 'WORKER' },
-      select: { id: true, name: true },
+    // Get all active employees who are eligible for leave
+    // Include: WORKER, MANAGER, ADMIN (employees who get PTO)
+    // Exclude: OWNER (usually exempt), and anyone without HOURLY or SALARIED worker types
+    const eligibleUsers = await this.prisma.user.findMany({
+      where: {
+        companyId,
+        isActive: true,
+        role: { in: ['WORKER', 'MANAGER', 'ADMIN'] },
+        // Only include users with HOURLY or SALARIED worker types (not contractors/volunteers)
+        workerTypes: {
+          hasSome: ['HOURLY', 'SALARIED'],
+        },
+      },
+      select: { id: true, name: true, role: true },
     });
 
     let created = 0;
     let updated = 0;
     const errors: string[] = [];
 
-    for (const worker of workers) {
+    for (const user of eligibleUsers) {
       try {
         // Check if balance already exists
         const existing = await this.prisma.leaveBalance.findUnique({
-          where: { userId_policyId: { userId: worker.id, policyId } },
+          where: { userId_policyId: { userId: user.id, policyId } },
         });
 
         if (existing) {
@@ -238,7 +248,7 @@ export class LeaveService {
           await this.prisma.leaveBalance.create({
             data: {
               companyId,
-              userId: worker.id,
+              userId: user.id,
               policyId,
               totalHours: policy.annualHours,
               usedHours: 0,
@@ -247,7 +257,7 @@ export class LeaveService {
           created++;
         }
       } catch (err) {
-        errors.push(`Worker ${worker.name}: ${err.message}`);
+        errors.push(`${user.name} (${user.role}): ${err.message}`);
       }
     }
 
@@ -259,8 +269,8 @@ export class LeaveService {
       targetId: policyId,
       details: {
         policyName: policy.name,
-        workersCreated: created,
-        workersUpdated: updated,
+        employeesCreated: created,
+        employeesUpdated: updated,
         errors,
       },
     });
@@ -269,37 +279,55 @@ export class LeaveService {
       success: true,
       created,
       updated,
-      total: workers.length,
+      total: eligibleUsers.length,
       errors,
     };
   }
 
   // ============================================
-  // SUMMARY FOR WORKERS PAGE
+  // SUMMARY FOR LEAVE PAGE (ALL ELIGIBLE EMPLOYEES)
   // ============================================
 
   async getWorkersSummary(companyId: string) {
-    const workers = await this.prisma.user.findMany({
-      where: { companyId, isActive: true, role: 'WORKER' },
+    // Get all employees eligible for leave tracking
+    // Include: WORKER, MANAGER, ADMIN
+    // Only those with HOURLY or SALARIED worker types (not contractors/volunteers)
+    const employees = await this.prisma.user.findMany({
+      where: {
+        companyId,
+        isActive: true,
+        role: { in: ['WORKER', 'MANAGER', 'ADMIN'] },
+        workerTypes: {
+          hasSome: ['HOURLY', 'SALARIED'],
+        },
+      },
       select: {
         id: true,
         name: true,
         phone: true,
+        email: true,
+        role: true,
         leaveBalances: {
           include: {
             policy: { select: { name: true, type: true } },
           },
         },
       },
-      orderBy: { name: 'asc' },
+      orderBy: [
+        { role: 'asc' }, // ADMIN first, then MANAGER, then WORKER
+        { name: 'asc' },
+      ],
     });
 
-    return workers.map(worker => ({
-      id: worker.id,
-      name: worker.name,
-      phone: worker.phone,
-      balances: worker.leaveBalances.reduce((acc, bal) => {
+    return employees.map(employee => ({
+      id: employee.id,
+      name: employee.name,
+      phone: employee.phone,
+      email: employee.email,
+      role: employee.role,
+      balances: employee.leaveBalances.reduce((acc, bal) => {
         acc[bal.policy.type] = {
+          id: bal.id,
           policyName: bal.policy.name,
           total: bal.totalHours,
           used: bal.usedHours,
