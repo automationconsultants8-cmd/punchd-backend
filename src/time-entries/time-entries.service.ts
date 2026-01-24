@@ -2059,6 +2059,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       clockInTime?: string;
       clockOutTime?: string;
       breakMinutes?: number;
+      restBreaksTaken?: number;
       jobId?: string;
       notes?: string;
     },
@@ -2093,10 +2094,11 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     }
 
     // Store old values for audit
-    const oldValues = {
+     const oldValues = {
       clockInTime: entry.clockInTime,
       clockOutTime: entry.clockOutTime,
       breakMinutes: entry.breakMinutes,
+      restBreaksTaken: entry.restBreaksTaken,
       jobId: entry.jobId,
       notes: entry.notes,
     };
@@ -2109,6 +2111,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       ? new Date(updateData.clockOutTime) 
       : entry.clockOutTime;
     const breakMinutes = updateData.breakMinutes ?? entry.breakMinutes ?? 0;
+    const restBreaksTaken = updateData.restBreaksTaken ?? entry.restBreaksTaken ?? 0;
 
     // Validate clock out is after clock in
     if (clockOutTime && clockOutTime <= clockInTime) {
@@ -2153,12 +2156,13 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     }
 
     // Update entry
-    const updatedEntry = await this.prisma.timeEntry.update({
+   const updatedEntry = await this.prisma.timeEntry.update({
       where: { id: entryId },
       data: {
         clockInTime,
         clockOutTime,
         breakMinutes,
+        restBreaksTaken,
         jobId: updateData.jobId !== undefined ? (updateData.jobId || null) : entry.jobId,
         notes: updateData.notes !== undefined ? updateData.notes : entry.notes,
         durationMinutes,
