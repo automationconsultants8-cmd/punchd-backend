@@ -2055,6 +2055,13 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
   /**
    * Update a time entry (for editing clock in/out, break, location, notes)
    */
+ // ============================================
+// REPLACE YOUR updateEntry AND archiveEntry METHODS WITH THESE
+// ============================================
+
+  /**
+   * Update a time entry (for editing clock in/out, break, location, notes)
+   */
   async updateEntry(
     entryId: string,
     companyId: string,
@@ -2098,7 +2105,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     }
 
     // Store old values for audit
-     const oldValues = {
+    const oldValues = {
       clockInTime: entry.clockInTime,
       clockOutTime: entry.clockOutTime,
       breakMinutes: entry.breakMinutes,
@@ -2160,7 +2167,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     }
 
     // Update entry
-   const updatedEntry = await this.prisma.timeEntry.update({
+    const updatedEntry = await this.prisma.timeEntry.update({
       where: { id: entryId },
       data: {
         clockInTime,
@@ -2183,7 +2190,8 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
         approvedBy: { select: { id: true, name: true } },
       },
     });
-      // Re-check break compliance and update violations
+
+    // Re-check break compliance and update violations
     if (durationMinutes && updatedEntry.clockOutTime) {
       try {
         // First delete existing violations for this entry
@@ -2224,11 +2232,9 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     // Create audit log entry
     await this.auditService.log({
-    // Create audit log entry
-    await this.auditService.log({
       companyId,
       userId: editedById,
-      action: 'TIME_ENTRY_ARCHIVED',
+      action: 'TIME_ENTRY_EDITED',
       targetType: 'TIME_ENTRY',
       targetId: entryId,
       details: {
@@ -2239,6 +2245,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
           clockInTime: oldValues.clockInTime?.toISOString(),
           clockOutTime: oldValues.clockOutTime?.toISOString(),
           breakMinutes: oldValues.breakMinutes,
+          restBreaksTaken: oldValues.restBreaksTaken,
           jobId: oldValues.jobId,
           notes: oldValues.notes,
         },
@@ -2246,6 +2253,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
           clockInTime: updatedEntry.clockInTime?.toISOString(),
           clockOutTime: updatedEntry.clockOutTime?.toISOString(),
           breakMinutes: updatedEntry.breakMinutes,
+          restBreaksTaken: updatedEntry.restBreaksTaken,
           jobId: updatedEntry.jobId,
           notes: updatedEntry.notes,
         },
@@ -2255,10 +2263,11 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     return updatedEntry;
   }
+
   /**
    * Archive a time entry (soft delete)
    */
- async archiveEntry(
+  async archiveEntry(
     entryId: string,
     companyId: string,
     archivedById: string,
@@ -2283,11 +2292,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       where: { timeEntryId: entryId },
     });
 
-    // Delete associated break violations
-    await this.prisma.breakViolation.deleteMany({
-      where: { timeEntryId: entryId },
-    });
-
     const updated = await this.prisma.timeEntry.update({
       where: { id: entryId },
       data: {
@@ -2305,7 +2309,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     await this.auditService.log({
       companyId,
       userId: archivedById,
-      action: 'TIME_ENTRY_EDITED',
+      action: 'TIME_ENTRY_ARCHIVED',
       targetType: 'TIME_ENTRY',
       targetId: entryId,
       details: {
