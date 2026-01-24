@@ -130,6 +130,30 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
   // Photo capture check
   const photoUrl = toggles.photoCapture ? 'verified-locally' : null;
 
+  // Determine worker type for this entry
+  const entryWorkerType = dto.workerType || workerTypes[0] || 'HOURLY';
+  
+  // Get auto-approve settings from company
+  const autoApproveSettings = (company?.settings as any)?.autoApprove || {
+    hourly: true,
+    salaried: true,
+    contractor: false,
+    volunteer: false,
+  };
+  
+  // Determine approval status based on worker type
+  let approvalStatus: 'PENDING' | 'APPROVED' = 'PENDING';
+  
+  if (entryWorkerType === 'HOURLY' && autoApproveSettings.hourly !== false) {
+    approvalStatus = 'APPROVED';
+  } else if (entryWorkerType === 'SALARIED' && autoApproveSettings.salaried !== false) {
+    approvalStatus = 'APPROVED';
+  } else if (entryWorkerType === 'CONTRACTOR' && autoApproveSettings.contractor === true) {
+    approvalStatus = 'APPROVED';
+  } else if (entryWorkerType === 'VOLUNTEER' && autoApproveSettings.volunteer === true) {
+    approvalStatus = 'APPROVED';
+  }
+
   // Create the time entry
   const timeEntry = await this.prisma.timeEntry.create({
     data: {
@@ -469,6 +493,7 @@ private async calculateOvertimeForEntry(
       companyId,
       clockInTime: { gte: dayStart, lte: dayEnd },
       clockOutTime: { not: null },
+      isArchived: false,
     },
     select: { durationMinutes: true },
   });
@@ -494,10 +519,11 @@ private async calculateOvertimeForEntry(
       companyId,
       clockInTime: { gte: weekStart, lt: dayStart }, // Before today (same week)
       clockOutTime: { not: null },
+      isArchived: false,
     },
     select: { durationMinutes: true },
   });
-
+  
   const previousWeeklyMinutes = weeklyEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
   // Total weekly = previous days this week + previous today + this entry
   const totalWeeklyMinutes = previousWeeklyMinutes + previousDailyMinutes + workMinutes;
@@ -694,6 +720,7 @@ private async check7thConsecutiveDay(
         companyId,
         clockInTime: { gte: checkDate, lte: checkDateEnd },
         durationMinutes: { gt: 0 },
+        isArchived: false,
       },
     });
 
@@ -766,7 +793,7 @@ private async check7thConsecutiveDay(
   }
 
   async getTimeEntries(companyId: string, filters?: any) {
-    const where: any = {};
+    const where: any = { isArchived: false };
 
     if (companyId) where.companyId = companyId;
     if (filters?.userId) where.userId = filters.userId;
@@ -812,6 +839,7 @@ private async check7thConsecutiveDay(
         companyId,
         approvalStatus: 'PENDING',
         clockOutTime: { not: null },
+        isArchived: false,
       },
       include: {
         user: { select: { id: true, name: true, phone: true } },
@@ -824,13 +852,13 @@ private async check7thConsecutiveDay(
   async getApprovalStats(companyId: string) {
     const [pending, approved, rejected] = await Promise.all([
       this.prisma.timeEntry.count({
-        where: { companyId, approvalStatus: 'PENDING', clockOutTime: { not: null } },
+        where: { companyId, approvalStatus: 'PENDING', clockOutTime: { not: null }, isArchived: false },
       }),
       this.prisma.timeEntry.count({
-        where: { companyId, approvalStatus: 'APPROVED' },
+        where: { companyId, approvalStatus: 'APPROVED', isArchived: false },
       }),
       this.prisma.timeEntry.count({
-        where: { companyId, approvalStatus: 'REJECTED' },
+        where: { companyId, approvalStatus: 'REJECTED', isArchived: false },
       }),
     ]);
 
@@ -1056,7 +1084,10 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       breakMinutes: dto.breakMinutes || 0,
       restBreaksTaken: dto.restBreaksTaken || 0,
       notes: dto.notes,
-      approvalStatus: 'PENDING',
+      workerType: entryWorkerType as any,  // ADD THIS
+      approvalStatus,  // CHANGED - uses variable instead of hardcoded 'PENDING'
+      approvedById: approvalStatus === 'APPROVED' ? createdById : null,  // ADD THIS
+      approvedAt: approvalStatus === 'APPROVED' ? new Date() : null,  // ADD THIS
       approvedById: null,
       approvedAt: null,
       regularMinutes: overtimeCalc.regularMinutes,
@@ -1114,7 +1145,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
   
 
  async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
-    const where: any = { companyId, clockOutTime: { not: null } };
+    const where: any = { companyId, clockOutTime: { not: null }, isArchived: false };
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
       if (filters.startDate) where.clockInTime.gte = filters.startDate;
@@ -1224,7 +1255,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       where: { id: companyId },
     });
 
-    const where: any = { companyId };
+    const where: any = { companyId, isArchived: false };
 
     if (filters.userId) {
       where.userId = filters.userId;
@@ -1528,7 +1559,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
       where: { id: companyId },
     });
 
-    const where: any = { companyId, clockOutTime: { not: null } };
+    const where: any = { companyId, clockOutTime: { not: null }, isArchived: false };
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
@@ -1753,7 +1784,7 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
   ): Promise<string> {
-    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED' };
+    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED', isArchived: false };
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
@@ -2318,5 +2349,80 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
     return updated;
   }
-}
+  // ... end of archiveEntry method
+    return updated;
+  }
+
+  // ============================================
+  // ADD THIS METHOD HERE (CHANGE 9)
+  // ============================================
+  async getArchivedEntries(companyId: string, filters?: any) {
+    const where: any = { companyId, isArchived: true };
+
+    if (filters?.userId) where.userId = filters.userId;
+    if (filters?.startDate || filters?.endDate) {
+      where.clockInTime = {};
+      if (filters.startDate) where.clockInTime.gte = filters.startDate;
+      if (filters.endDate) {
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        where.clockInTime.lte = endDate;
+      }
+    }
+
+    return this.prisma.timeEntry.findMany({
+      where,
+      include: {
+        user: { select: { id: true, name: true, phone: true, hourlyRate: true } },
+        job: true,
+      },
+      orderBy: { archivedAt: 'desc' },
+    });
+  }
+
+  // ============================================
+  // ADD THIS METHOD HERE (CHANGE 10)
+  // ============================================
+  async restoreEntry(entryId: string, companyId: string, restoredById: string) {
+    const entry = await this.prisma.timeEntry.findFirst({
+      where: { id: entryId, companyId, isArchived: true },
+      include: { user: { select: { id: true, name: true } } },
+    });
+
+    if (!entry) {
+      throw new NotFoundException('Archived entry not found');
+    }
+
+    const updated = await this.prisma.timeEntry.update({
+      where: { id: entryId },
+      data: {
+        isArchived: false,
+        archivedAt: null,
+        archivedById: null,
+        archiveReason: null,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        job: true,
+      },
+    });
+
+    await this.auditService.log({
+      companyId,
+      userId: restoredById,
+      action: 'TIME_ENTRY_ARCHIVED',
+      targetType: 'TIME_ENTRY',
+      targetId: entryId,
+      details: {
+        action: 'RESTORED',
+        workerName: entry.user?.name,
+        workerId: entry.userId,
+        previousApprovalStatus: entry.approvalStatus,
+      },
+    });
+
+    return updated;
+  }
+} 
+
 
