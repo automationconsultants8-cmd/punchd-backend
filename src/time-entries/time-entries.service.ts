@@ -1011,13 +1011,10 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
   // NO OT for contractors, volunteers, or salaried workers
   const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
 
-  // Get timezone offset (default to Pacific)
-  const tz = dto.timezone || 'America/Los_Angeles';
-  const tzOffset = tz === 'America/Los_Angeles' ? '-08:00' : '+00:00';
+ // Store time as entered (no timezone conversion)
+  const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00.000Z`);
+  const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00.000Z`);
   
-  const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00${tzOffset}`);
-  const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00${tzOffset}`);
-    
   if (clockOutTime <= clockInTime) {
     throw new BadRequestException('Clock out time must be after clock in time');
   }
