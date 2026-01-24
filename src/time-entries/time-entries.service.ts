@@ -130,8 +130,7 @@ async clockIn(userId: string, companyId: string, dto: ClockInDto) {
   // Photo capture check
   const photoUrl = toggles.photoCapture ? 'verified-locally' : null;
 
-  // Determine worker type for this entry
-  const entryWorkerType = dto.workerType || workerTypes[0] || 'HOURLY';
+
   
   // Get auto-approve settings from company
   const autoApproveSettings = (company?.settings as any)?.autoApprove || {
@@ -1031,6 +1030,35 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
 
   // Determine if worker should get OT calculations
   const workerTypes = (user as any).workerTypes || [];
+  const workerTypes = (user as any).workerTypes || [];
+  
+  // ADD THIS BLOCK ↓↓↓
+  // Determine worker type for this entry
+  const entryWorkerType = dto.workerType || workerTypes[0] || 'HOURLY';
+  
+  // Get auto-approve settings from company
+  const autoApproveSettings = (company?.settings as any)?.autoApprove || {
+    hourly: true,
+    salaried: true,
+    contractor: false,
+    volunteer: false,
+  };
+  
+  // Determine approval status based on worker type
+  let approvalStatus: 'PENDING' | 'APPROVED' = 'PENDING';
+  
+  if (entryWorkerType === 'HOURLY' && autoApproveSettings.hourly !== false) {
+    approvalStatus = 'APPROVED';
+  } else if (entryWorkerType === 'SALARIED' && autoApproveSettings.salaried !== false) {
+    approvalStatus = 'APPROVED';
+  } else if (entryWorkerType === 'CONTRACTOR' && autoApproveSettings.contractor === true) {
+    approvalStatus = 'APPROVED';
+  } else if (entryWorkerType === 'VOLUNTEER' && autoApproveSettings.volunteer === true) {
+    approvalStatus = 'APPROVED';
+  }
+  // END OF BLOCK ↑↑↑
+
+  const entry = await this.prisma.timeEntry.create({
   const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
   const isContractor = workerTypes.includes('CONTRACTOR');
   const isVolunteer = workerTypes.includes('VOLUNTEER');
@@ -2295,70 +2323,8 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
   /**
    * Archive a time entry (soft delete)
    */
-  async archiveEntry(
-    entryId: string,
-    companyId: string,
-    archivedById: string,
-    reason?: string,
-  ) {
-    const entry = await this.prisma.timeEntry.findFirst({
-      where: { id: entryId, companyId },
-      include: { user: { select: { id: true, name: true } } },
-    });
-
-    if (!entry) {
-      throw new NotFoundException('Time entry not found');
-    }
-
-    // Check if already archived
-    if ((entry as any).isArchived) {
-      throw new BadRequestException('Entry is already archived');
-    }
-
-    // Delete associated break violations
-    await this.prisma.breakViolation.deleteMany({
-      where: { timeEntryId: entryId },
-    });
-
-    const updated = await this.prisma.timeEntry.update({
-      where: { id: entryId },
-      data: {
-        isArchived: true,
-        archivedAt: new Date(),
-        archivedById,
-        archiveReason: reason || null,
-      },
-      include: {
-        user: { select: { id: true, name: true, phone: true } },
-        job: true,
-      },
-    });
-
-    await this.auditService.log({
-      companyId,
-      userId: archivedById,
-      action: 'TIME_ENTRY_ARCHIVED',
-      targetType: 'TIME_ENTRY',
-      targetId: entryId,
-      details: {
-        workerName: entry.user?.name,
-        workerId: entry.userId,
-        reason,
-      },
-    });
-
-    return updated;
-  }
-  // ... end of archiveEntry method
-    return updated;
-  }
-
-  // ============================================
-  // ADD THIS METHOD HERE (CHANGE 9)
-  // ============================================
-  async getArchivedEntries(companyId: string, filters?: any) {
+ async getArchivedEntries(companyId: string, filters?: any) {
     const where: any = { companyId, isArchived: true };
-
     if (filters?.userId) where.userId = filters.userId;
     if (filters?.startDate || filters?.endDate) {
       where.clockInTime = {};
@@ -2369,7 +2335,6 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
         where.clockInTime.lte = endDate;
       }
     }
-
     return this.prisma.timeEntry.findMany({
       where,
       include: {
@@ -2380,49 +2345,25 @@ async createManualEntry(companyId: string, createdById: string, dto: CreateManua
     });
   }
 
-  // ============================================
-  // ADD THIS METHOD HERE (CHANGE 10)
-  // ============================================
   async restoreEntry(entryId: string, companyId: string, restoredById: string) {
     const entry = await this.prisma.timeEntry.findFirst({
       where: { id: entryId, companyId, isArchived: true },
       include: { user: { select: { id: true, name: true } } },
     });
-
-    if (!entry) {
-      throw new NotFoundException('Archived entry not found');
-    }
-
+    if (!entry) throw new NotFoundException('Archived entry not found');
     const updated = await this.prisma.timeEntry.update({
       where: { id: entryId },
-      data: {
-        isArchived: false,
-        archivedAt: null,
-        archivedById: null,
-        archiveReason: null,
-      },
-      include: {
-        user: { select: { id: true, name: true, phone: true } },
-        job: true,
-      },
+      data: { isArchived: false, archivedAt: null, archivedById: null, archiveReason: null },
+      include: { user: { select: { id: true, name: true, phone: true } }, job: true },
     });
-
     await this.auditService.log({
-      companyId,
-      userId: restoredById,
-      action: 'TIME_ENTRY_ARCHIVED',
-      targetType: 'TIME_ENTRY',
-      targetId: entryId,
-      details: {
-        action: 'RESTORED',
-        workerName: entry.user?.name,
-        workerId: entry.userId,
-        previousApprovalStatus: entry.approvalStatus,
-      },
+      companyId, userId: restoredById, action: 'TIME_ENTRY_ARCHIVED',
+      targetType: 'TIME_ENTRY', targetId: entryId,
+      details: { action: 'RESTORED', workerName: entry.user?.name, workerId: entry.userId, previousApprovalStatus: entry.approvalStatus },
     });
-
     return updated;
   }
-} 
+
+
 
 
