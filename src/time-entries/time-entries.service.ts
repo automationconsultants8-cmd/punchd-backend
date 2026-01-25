@@ -10,6 +10,7 @@ import { CreateManualEntryDto } from './dto/create-manual-entry.dto';
 import { Decimal } from '@prisma/client/runtime/library';
 import * as ExcelJS from 'exceljs';
 import * as PDFDocument from 'pdfkit';
+import { parseLocalTimeToUTC } from '../common/timezone.util';
 
 @Injectable()
 export class TimeEntriesService {
@@ -913,8 +914,9 @@ export class TimeEntriesService {
 
     const entryWorkerType = dto.workerType || 'HOURLY';
     const shouldCalculateOT = entryWorkerType === 'HOURLY' && toggles.overtimeCalculations;
-    const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00.000Z`);
-    const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00.000Z`);
+    const companyTimezone = (company?.settings as any)?.timezone || 'America/Los_Angeles';
+    const clockInTime = parseLocalTimeToUTC(dto.date, dto.clockIn, companyTimezone);
+    const clockOutTime = parseLocalTimeToUTC(dto.date, dto.clockOut, companyTimezone);
     
     if (clockOutTime <= clockInTime) {
       throw new BadRequestException('Clock out time must be after clock in time');
