@@ -944,8 +944,7 @@ export class TimeEntriesService {
       overtimeCalc.laborCost = (workMinutes / 60) * overtimeCalc.hourlyRate;
     }
 
-    // Determine worker type for this entry
-    const entryWorkerType = dto.workerType || workerTypes[0] || 'HOURLY';
+  
     
     // Get auto-approve settings from company
     const autoApproveSettings = (company?.settings as any)?.autoApprove || {
