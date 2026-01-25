@@ -296,13 +296,8 @@ export class TimeEntriesService {
       select: { workerTypes: true, hourlyRate: true },
     });
 
-    const workerTypes = user?.workerTypes || [];
-    const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
-    const isContractor = workerTypes.includes('CONTRACTOR');
-    const isVolunteer = workerTypes.includes('VOLUNTEER');
-    const isSalaried = workerTypes.includes('SALARIED');
-    
-    const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
+    const entryWorkerType = (activeEntry as any).workerType || 'HOURLY';
+    const shouldCalculateOT = entryWorkerType === 'HOURLY' && toggles.overtimeCalculations;
 
     const clockInTime = new Date(activeEntry.clockInTime);
     const clockOutTime = new Date();
@@ -351,7 +346,7 @@ export class TimeEntriesService {
       },
     });
 
-    if (toggles.breakTracking && isHourly && !isContractor && !isVolunteer) {
+    if (toggles.breakTracking && entryWorkerType === 'HOURLY') {
       try {
         const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
         const complianceResult = this.breakComplianceService.checkCompliance(
@@ -916,14 +911,8 @@ export class TimeEntriesService {
     const { getToggles } = await import('../common/feature-toggles');
     const toggles = getToggles(company?.settings || {});
 
-    const workerTypes = (user as any).workerTypes || [];
-    const isHourly = workerTypes.length === 0 || workerTypes.includes('HOURLY');
-    const isContractor = workerTypes.includes('CONTRACTOR');
-    const isVolunteer = workerTypes.includes('VOLUNTEER');
-    const isSalaried = workerTypes.includes('SALARIED');
-    
-    const shouldCalculateOT = isHourly && !isContractor && !isVolunteer && !isSalaried && toggles.overtimeCalculations;
-
+    const entryWorkerType = dto.workerType || 'HOURLY';
+    const shouldCalculateOT = entryWorkerType === 'HOURLY' && toggles.overtimeCalculations;
     const clockInTime = new Date(`${dto.date}T${dto.clockIn}:00.000Z`);
     const clockOutTime = new Date(`${dto.date}T${dto.clockOut}:00.000Z`);
     
@@ -1006,7 +995,7 @@ export class TimeEntriesService {
       },
     });
 
-    if (toggles.breakTracking && isHourly && !isContractor && !isVolunteer) {
+    if (toggles.breakTracking && entryWorkerType === 'HOURLY') {
       try {
         const breakSettings = await this.breakComplianceService.getComplianceSettings(companyId);
         const complianceResult = this.breakComplianceService.checkCompliance(
