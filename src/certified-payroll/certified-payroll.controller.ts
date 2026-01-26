@@ -1,93 +1,220 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, Request, Res } from '@nestjs/common';
+import { Controller, Get, Post, Query, Param, UseGuards, Request, Res, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { Response } from 'express';
-import { CertifiedPayrollService, PayrollPreviewData } from './certified-payroll.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RequiresFeature } from '../features/feature.decorator';
 import { FeatureGuard } from '../features/feature.guard';
+import { RequiresFeature } from '../features/feature.decorator';
+import { ComplianceReportsService } from './compliance-reports.service';
 
-@ApiTags('Certified Payroll')
-@Controller('certified-payroll')
+@ApiTags('Compliance Reports')
+@Controller('compliance-reports')
 @UseGuards(JwtAuthGuard, FeatureGuard)
-@RequiresFeature('CERTIFIED_PAYROLL')
 @ApiBearerAuth()
-export class CertifiedPayrollController {
-  constructor(private readonly certifiedPayrollService: CertifiedPayrollService) {}
+export class ComplianceReportsController {
+  constructor(private readonly service: ComplianceReportsService) {}
+
+  // ============================================
+  // JOBS
+  // ============================================
 
   @Get('jobs')
-  @ApiOperation({ summary: 'Get prevailing wage jobs' })
-  getPrevailingWageJobs(@Request() req) {
-    return this.certifiedPayrollService.getPrevailingWageJobs(req.user.companyId);
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Get jobs for reports (all or prevailing wage only)' })
+  @ApiQuery({ name: 'prevailingWageOnly', required: false, type: Boolean })
+  getJobs(
+    @Request() req,
+    @Query('prevailingWageOnly') prevailingWageOnly?: string,
+  ) {
+    return this.service.getJobs(req.user.companyId, prevailingWageOnly === 'true');
   }
 
-  @Get('preview')
-  @ApiOperation({ summary: 'Preview payroll data before generating' })
+  // ============================================
+  // CLIENT BILLING REPORT
+  // ============================================
+
+  @Get('client-billing/preview')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Preview client billing report' })
+  @ApiQuery({ name: 'jobId', required: false })
+  @ApiQuery({ name: 'startDate', required: true })
+  @ApiQuery({ name: 'endDate', required: true })
+  @ApiQuery({ name: 'billRate', required: false })
+  previewClientBilling(
+    @Request() req,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('jobId') jobId?: string,
+    @Query('billRate') billRate?: string,
+  ) {
+    return this.service.generateClientBillingReport(req.user.companyId, req.user.userId, {
+      jobId,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      billRate: billRate ? parseFloat(billRate) : undefined,
+    });
+  }
+
+  @Get('client-billing/pdf')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Download client billing report as PDF' })
+  @ApiQuery({ name: 'jobId', required: false })
+  @ApiQuery({ name: 'startDate', required: true })
+  @ApiQuery({ name: 'endDate', required: true })
+  @ApiQuery({ name: 'billRate', required: false })
+  async downloadClientBillingPDF(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('jobId') jobId?: string,
+    @Query('billRate') billRate?: string,
+  ) {
+    const pdf = await this.service.generateClientBillingPDF(req.user.companyId, req.user.userId, {
+      jobId,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      billRate: billRate ? parseFloat(billRate) : undefined,
+    });
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename=client-billing-${startDate}-to-${endDate}.pdf`,
+      'Content-Length': pdf.length,
+    });
+    res.send(pdf);
+  }
+
+  // ============================================
+  // WORKER SUMMARY REPORT
+  // ============================================
+
+  @Get('worker-summary/preview')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Preview worker summary report' })
+  @ApiQuery({ name: 'workerId', required: false })
+  @ApiQuery({ name: 'jobId', required: false })
+  @ApiQuery({ name: 'startDate', required: true })
+  @ApiQuery({ name: 'endDate', required: true })
+  previewWorkerSummary(
+    @Request() req,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('workerId') workerId?: string,
+    @Query('jobId') jobId?: string,
+  ) {
+    return this.service.generateWorkerSummaryReport(req.user.companyId, req.user.userId, {
+      workerId,
+      jobId,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+    });
+  }
+
+  @Get('worker-summary/pdf')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Download worker summary report as PDF' })
+  @ApiQuery({ name: 'workerId', required: false })
+  @ApiQuery({ name: 'jobId', required: false })
+  @ApiQuery({ name: 'startDate', required: true })
+  @ApiQuery({ name: 'endDate', required: true })
+  async downloadWorkerSummaryPDF(
+    @Request() req,
+    @Res() res: Response,
+    @Query('startDate') startDate: string,
+    @Query('endDate') endDate: string,
+    @Query('workerId') workerId?: string,
+    @Query('jobId') jobId?: string,
+  ) {
+    const pdf = await this.service.generateWorkerSummaryPDF(req.user.companyId, req.user.userId, {
+      workerId,
+      jobId,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+    });
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename=worker-summary-${startDate}-to-${endDate}.pdf`,
+      'Content-Length': pdf.length,
+    });
+    res.send(pdf);
+  }
+
+  // ============================================
+  // WH-347 CERTIFIED PAYROLL
+  // ============================================
+
+  @Get('wh347/jobs')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Get prevailing wage jobs for WH-347' })
+  getWH347Jobs(@Request() req) {
+    return this.service.getWH347Jobs(req.user.companyId);
+  }
+
+  @Get('wh347/preview')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Preview WH-347 certified payroll' })
   @ApiQuery({ name: 'jobId', required: true })
   @ApiQuery({ name: 'weekEndingDate', required: true })
-  previewPayroll(
+  previewWH347(
     @Request() req,
     @Query('jobId') jobId: string,
     @Query('weekEndingDate') weekEndingDate: string,
-  ): Promise<PayrollPreviewData> {
-    return this.certifiedPayrollService.generatePayrollData(
-      req.user.companyId,
-      jobId,
-      new Date(weekEndingDate),
-    );
+  ) {
+    return this.service.previewWH347(req.user.companyId, jobId, new Date(weekEndingDate));
   }
 
-  @Post('generate')
-  @ApiOperation({ summary: 'Generate certified payroll report' })
-  generatePayroll(
+  @Post('wh347/generate')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Generate WH-347 certified payroll' })
+  generateWH347(
     @Request() req,
     @Body() body: { jobId: string; weekEndingDate: string },
   ) {
-    return this.certifiedPayrollService.createOrUpdatePayroll(
+    return this.service.generateWH347(
       req.user.companyId,
+      req.user.userId,
       body.jobId,
       new Date(body.weekEndingDate),
-      req.user.userId,
     );
   }
 
-  @Get()
-  @ApiOperation({ summary: 'Get all certified payrolls' })
-  @ApiQuery({ name: 'jobId', required: false })
-  @ApiQuery({ name: 'status', required: false })
-  getPayrolls(
+  @Get('wh347/:id/pdf')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Download WH-347 PDF' })
+  async downloadWH347PDF(
     @Request() req,
-    @Query('jobId') jobId?: string,
-    @Query('status') status?: string,
+    @Res() res: Response,
+    @Param('id') id: string,
   ) {
-    return this.certifiedPayrollService.getPayrolls(req.user.companyId, { jobId, status });
+    const pdf = await this.service.generateWH347PDF(id, req.user.companyId);
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename=WH-347_${id}.pdf`,
+      'Content-Length': pdf.length,
+    });
+    res.send(pdf);
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Get payroll by ID' })
-  getPayrollById(@Request() req, @Param('id') id: string) {
-    return this.certifiedPayrollService.getPayrollById(req.user.companyId, id);
-  }
-
-  @Post(':id/submit')
-  @ApiOperation({ summary: 'Submit payroll' })
-  submitPayroll(@Request() req, @Param('id') id: string) {
-    return this.certifiedPayrollService.submitPayroll(req.user.companyId, id, req.user.userId);
-  }
-
-  @Get(':id/pdf')
-  @ApiOperation({ summary: 'Download payroll as PDF' })
-  async downloadPDF(
+  @Post('wh347/:id/submit')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Mark WH-347 as submitted' })
+  submitWH347(
     @Request() req,
     @Param('id') id: string,
-    @Res() res: Response,
   ) {
-    const payroll = await this.certifiedPayrollService.getPayrollById(req.user.companyId, id);
-    const buffer = await this.certifiedPayrollService.generatePDF(req.user.companyId, id);
+    return this.service.submitPayroll(id, req.user.companyId, req.user.userId);
+  }
 
-    const filename = `WH-347_${payroll.job.name}_${new Date(payroll.weekEndingDate).toISOString().split('T')[0]}.pdf`;
+  // ============================================
+  // HISTORY
+  // ============================================
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(buffer);
+  @Get('history')
+  @RequiresFeature('CERTIFIED_PAYROLL')
+  @ApiOperation({ summary: 'Get certified payroll history' })
+  getHistory(@Request() req) {
+    return this.service.getPayrollHistory(req.user.companyId);
   }
 }
