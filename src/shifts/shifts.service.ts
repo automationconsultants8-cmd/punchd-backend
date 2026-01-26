@@ -100,6 +100,32 @@ export class ShiftsService {
     return { hours, minutes };
   }
 
+  // Helper to parse a single time field for updates
+  private parseTimeForUpdate(timeValue: string | Date, shiftDate: Date): Date {
+    if (timeValue instanceof Date) {
+      return timeValue;
+    }
+    
+    if (typeof timeValue === 'string') {
+      // Handle "08:00" or "08:00 AM" format
+      if (timeValue.includes(':') && !timeValue.includes('T')) {
+        const timePart = this.parseTimeString(timeValue);
+        const result = new Date(shiftDate);
+        result.setHours(timePart.hours, timePart.minutes, 0, 0);
+        return result;
+      } else {
+        // Full ISO string
+        const parsed = new Date(timeValue);
+        if (isNaN(parsed.getTime())) {
+          throw new BadRequestException('Invalid time format');
+        }
+        return parsed;
+      }
+    }
+    
+    throw new BadRequestException('Invalid time format');
+  }
+
   async create(data: {
     companyId: string;
     userId?: string;
@@ -430,21 +456,55 @@ export class ShiftsService {
   async update(id: string, data: {
     userId?: string;
     jobId?: string;
-    shiftDate?: Date;
-    startTime?: Date;
-    endTime?: Date;
+    shiftDate?: string | Date;
+    startTime?: string | Date;
+    endTime?: string | Date;
     status?: ShiftStatus;
     notes?: string;
     isOpen?: boolean;
   }, updatedById: string) {
     const shift = await this.findOne(id);
 
+    // Build the update data with proper parsing
+    const updateData: any = {};
+
+    if (data.userId !== undefined) updateData.userId = data.userId || null;
+    if (data.jobId !== undefined) updateData.jobId = data.jobId;
+    if (data.status !== undefined) updateData.status = data.status;
+    if (data.notes !== undefined) updateData.notes = data.notes;
+    if (data.isOpen !== undefined) updateData.isOpen = data.isOpen;
+
+    // Parse shiftDate
+    let shiftDateForTimes: Date = shift.shiftDate;
+    if (data.shiftDate !== undefined) {
+      if (data.shiftDate instanceof Date) {
+        updateData.shiftDate = data.shiftDate;
+        shiftDateForTimes = data.shiftDate;
+      } else if (typeof data.shiftDate === 'string') {
+        updateData.shiftDate = new Date(data.shiftDate + 'T12:00:00');
+        shiftDateForTimes = updateData.shiftDate;
+      }
+    }
+
+    // Parse startTime
+    if (data.startTime !== undefined) {
+      updateData.startTime = this.parseTimeForUpdate(data.startTime, shiftDateForTimes);
+    }
+
+    // Parse endTime
+    if (data.endTime !== undefined) {
+      updateData.endTime = this.parseTimeForUpdate(data.endTime, shiftDateForTimes);
+    }
+
+    // If assigning a user, mark as not open and scheduled
+    if (data.userId) {
+      updateData.isOpen = false;
+      updateData.status = 'SCHEDULED';
+    }
+
     const updatedShift = await this.prisma.shift.update({
       where: { id },
-      data: {
-        ...data,
-        ...(data.userId && { isOpen: false, status: 'SCHEDULED' }),
-      },
+      data: updateData,
       include: {
         user: true,
         job: true,
