@@ -1150,7 +1150,13 @@ export class TimeEntriesService {
       where: { id: companyId },
     });
 
-    const where: any = { companyId, isArchived: false };
+    const where: any = { 
+  companyId, 
+  isArchived: false,
+  clockOutTime: { not: null },
+  approvalStatus: 'APPROVED',
+  workerType: { in: ['HOURLY', 'SALARIED'] },
+};
 
     if (filters.userId) {
       where.userId = filters.userId;
@@ -1235,7 +1241,13 @@ export class TimeEntriesService {
       where: { id: companyId },
     });
 
-    const where: any = { companyId, isArchived: false };
+    const where: any = { 
+  companyId, 
+  isArchived: false,
+  clockOutTime: { not: null },
+  approvalStatus: 'APPROVED',
+  workerType: { in: ['HOURLY', 'SALARIED'] },
+};
 
     if (filters.userId) {
       where.userId = filters.userId;
