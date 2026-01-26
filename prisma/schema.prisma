@@ -56,7 +56,8 @@ model Company {
   leavePolicies         LeavePolicy[]
   leaveBalances         LeaveBalance[]
   timesheets            Timesheet[]
-
+  invoices              Invoice[]
+   
   @@map("companies")
 }
 
@@ -146,6 +147,7 @@ model User {
   volunteerGoal           VolunteerGoal?
   volunteerSignOffRequests VolunteerSignOffRequest[]
   volunteerCertificates   VolunteerCertificate[]
+  invoices                Invoice[]
 
   @@unique([companyId, phone])
   @@index([companyId, email])
@@ -318,6 +320,7 @@ model Job {
 
   company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   timeEntries           TimeEntry[]
+  invoice           Invoice?
   shifts                Shift[]
   shiftTemplates        ShiftTemplate[] @relation("ShiftTemplateJob")
   workerJobRates        WorkerJobRate[]
