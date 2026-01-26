@@ -48,7 +48,6 @@ model Company {
   certifiedPayrolls     CertifiedPayroll[]
   shiftRequests         ShiftRequest[]
   timeOffRequests       TimeOffRequest[]
-  hoursRequested  Float?
   messages              Message[]
   managerPermissions    ManagerPermission[]
   managerLocationAssignments ManagerLocationAssignment[]
@@ -744,6 +743,7 @@ model TimeOffRequest {
   timeOffType     TimeOffType
   startDate       DateTime       @db.Date
   endDate         DateTime       @db.Date
+  hoursRequested  Float? 
   reason          String?
   
   status          TimeOffStatus  @default(PENDING)
