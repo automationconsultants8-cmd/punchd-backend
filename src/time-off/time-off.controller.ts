@@ -106,7 +106,7 @@ export class TimeOffController {
     return this.timeOffService.findOne(id);
   }
 
-  @Post(':id/approve')
+  @Patch(':id/approve')
   @ApiOperation({ summary: 'Approve a time off request' })
   async approveRequest(
     @Request() req,
@@ -116,7 +116,7 @@ export class TimeOffController {
     return this.timeOffService.approve(id, req.user.userId, body.notes);
   }
 
-  @Post(':id/decline')
+  @Patch(':id/decline')
   @ApiOperation({ summary: 'Decline a time off request' })
   async declineRequest(
     @Request() req,
