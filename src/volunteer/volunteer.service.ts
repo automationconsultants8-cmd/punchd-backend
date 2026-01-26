@@ -24,12 +24,14 @@ export class VolunteerService {
     let totalMinutes = 0;
     let monthMinutes = 0;
     let yearMinutes = 0;
+    let approvedMinutes = 0;
 
     entries.forEach(e => {
       if (e.durationMinutes) {
         totalMinutes += e.durationMinutes;
         if (new Date(e.clockInTime) >= monthStart) monthMinutes += e.durationMinutes;
         if (new Date(e.clockInTime) >= yearStart) yearMinutes += e.durationMinutes;
+        if (e.approvalStatus === 'APPROVED') approvedMinutes += e.durationMinutes;
       }
     });
 
@@ -45,14 +47,23 @@ export class VolunteerService {
       where: { userId },
     });
 
+    // Get company's certificate threshold
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { certificateHoursThreshold: true },
+    });
+    const certificateThreshold = company?.certificateHoursThreshold || 10;
+
     return {
       stats: {
         totalHours: Math.round(totalMinutes / 60 * 10) / 10,
         hoursThisMonth: Math.round(monthMinutes / 60 * 10) / 10,
         hoursThisYear: Math.round(yearMinutes / 60 * 10) / 10,
+        approvedHours: Math.round(approvedMinutes / 60 * 10) / 10,
         hourGoal: goal?.targetHours || 0,
         pendingSignOffs,
         certificatesEarned: certificates,
+        certificateThreshold,
       },
       recentEntries: entries.slice(0, 5).map(e => ({
         id: e.id,
@@ -211,7 +222,44 @@ export class VolunteerService {
     });
   }
 
+  async rejectSignOff(requestId: string, reviewerId: string, reason: string) {
+    const request = await this.prisma.volunteerSignOffRequest.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!request) throw new NotFoundException('Sign-off request not found');
+    if (request.status !== 'PENDING') throw new BadRequestException('Request already processed');
+
+    // Reject the entries
+    await this.prisma.timeEntry.updateMany({
+      where: { id: { in: request.timeEntryIds } },
+      data: {
+        approvalStatus: 'REJECTED',
+        approvedById: reviewerId,
+        approvedAt: new Date(),
+        rejectionReason: reason,
+      },
+    });
+
+    return this.prisma.volunteerSignOffRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'REJECTED',
+        reviewedAt: new Date(),
+        reviewedById: reviewerId,
+        rejectionReason: reason,
+      },
+    });
+  }
+
   async generateCertificate(userId: string, companyId: string) {
+    // Get company's certificate threshold
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { certificateHoursThreshold: true, name: true },
+    });
+    const threshold = company?.certificateHoursThreshold || 10;
+
     const entries = await this.prisma.timeEntry.findMany({
       where: {
         userId,
@@ -222,10 +270,12 @@ export class VolunteerService {
     });
 
     const totalMinutes = entries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
-    const totalHours = Math.floor(totalMinutes / 60);
+    const totalHours = Math.round(totalMinutes / 60 * 10) / 10;
 
-    if (totalHours < 1) {
-      throw new BadRequestException('You need at least 1 approved hour to generate a certificate');
+    if (totalHours < threshold) {
+      throw new BadRequestException(
+        `You need at least ${threshold} approved hours to generate a certificate. You currently have ${totalHours} approved hours.`
+      );
     }
 
     const user = await this.prisma.user.findUnique({
@@ -241,9 +291,9 @@ export class VolunteerService {
       data: {
         userId,
         companyId,
-        title: `Volunteer Service Certificate - ${totalHours} Hours`,
-        description: `Awarded to ${user.name} for ${totalHours} hours of volunteer service with ${user.company.name}`,
-        hoursEarned: totalHours,
+        title: `Volunteer Service Certificate - ${Math.floor(totalHours)} Hours`,
+        description: `Awarded to ${user.name} for ${Math.floor(totalHours)} hours of volunteer service with ${user.company.name}`,
+        hoursEarned: Math.floor(totalHours),
       },
     });
 
@@ -262,6 +312,28 @@ export class VolunteerService {
       },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  async getSignOffById(signOffId: string, companyId: string) {
+    const signOff = await this.prisma.volunteerSignOffRequest.findFirst({
+      where: { id: signOffId, companyId },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true } },
+      },
+    });
+
+    if (!signOff) throw new NotFoundException('Sign-off request not found');
+
+    // Fetch the actual entries
+    const entries = await this.prisma.timeEntry.findMany({
+      where: { id: { in: signOff.timeEntryIds } },
+      orderBy: { clockInTime: 'desc' },
+    });
+
+    return {
+      ...signOff,
+      entries,
+    };
   }
 
   async getAllVolunteersPending(companyId: string) {
@@ -335,8 +407,47 @@ export class VolunteerService {
     });
   }
 
-  async generateCertificateForUser(userId: string, companyId: string) {
-    return this.generateCertificate(userId, companyId);
+  async generateCertificateForUser(userId: string, companyId: string, customTitle?: string) {
+    // Get company's certificate threshold
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { certificateHoursThreshold: true, name: true },
+    });
+    const threshold = company?.certificateHoursThreshold || 10;
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where: {
+        userId,
+        workerType: 'VOLUNTEER',
+        approvalStatus: 'APPROVED',
+        clockOutTime: { not: null },
+      },
+    });
+
+    const totalMinutes = entries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+    const totalHours = Math.round(totalMinutes / 60 * 10) / 10;
+
+    if (totalHours < threshold) {
+      throw new BadRequestException(
+        `This volunteer needs at least ${threshold} approved hours to receive a certificate. They currently have ${totalHours} approved hours.`
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) throw new NotFoundException('User not found');
+
+    return this.prisma.volunteerCertificate.create({
+      data: {
+        userId,
+        companyId,
+        title: customTitle || `Volunteer Service Certificate - ${Math.floor(totalHours)} Hours`,
+        description: `Awarded to ${user.name} for ${Math.floor(totalHours)} hours of volunteer service with ${company?.name || 'the organization'}`,
+        hoursEarned: Math.floor(totalHours),
+      },
+    });
   }
 
   async getAllCertificates(companyId: string) {
@@ -347,5 +458,23 @@ export class VolunteerService {
       },
       orderBy: { issuedAt: 'desc' },
     });
+  }
+
+  async setCertificateThreshold(companyId: string, hours: number) {
+    if (hours < 1) throw new BadRequestException('Threshold must be at least 1 hour');
+    
+    return this.prisma.company.update({
+      where: { id: companyId },
+      data: { certificateHoursThreshold: hours },
+      select: { certificateHoursThreshold: true },
+    });
+  }
+
+  async getCertificateThreshold(companyId: string) {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { certificateHoursThreshold: true },
+    });
+    return { threshold: company?.certificateHoursThreshold || 10 };
   }
 }
