@@ -58,10 +58,11 @@ model Company {
   timesheets            Timesheet[]
   invoices              Invoice[]
   documents Document[]
-  logoUrl       String?
-  primaryColor  String?  @default("#1a1a2e")
-  accentColor   String?  @default("#c9a227")
-  @@map("companies")
+  logoUrl        String?
+  primaryColor   String?  @default("#1a1a2e")
+  accentColor    String?  @default("#c9a227")
+  fontFamily     String?  @default("Inter")
+   @@map("companies")
 }
 
 enum WorkerType {
