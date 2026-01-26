@@ -1,14 +1,40 @@
-import { IsString, IsOptional, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsDateString, IsArray, IsEnum } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateTimesheetDto {
-  @ApiProperty({ description: 'Start of period (YYYY-MM-DD)' })
+  @ApiPropertyOptional({ description: 'Start date of the period (legacy, optional if entryIds provided)' })
   @IsDateString()
-  periodStart: string;
+  @IsOptional()
+  periodStart?: string;
 
-  @ApiProperty({ description: 'End of period (YYYY-MM-DD)' })
+  @ApiPropertyOptional({ description: 'End date of the period (legacy, optional if entryIds provided)' })
   @IsDateString()
-  periodEnd: string;
+  @IsOptional()
+  periodEnd?: string;
+
+  @ApiPropertyOptional({ description: 'Specific entry IDs to include in timesheet' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  entryIds?: string[];
+
+  @ApiPropertyOptional({ description: 'Optional name for the timesheet' })
+  @IsString()
+  @IsOptional()
+  name?: string;
+}
+
+export class UpdateTimesheetDto {
+  @ApiPropertyOptional({ description: 'Entry IDs to include (replaces current entries)' })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  entryIds?: string[];
+
+  @ApiPropertyOptional({ description: 'Optional name for the timesheet' })
+  @IsString()
+  @IsOptional()
+  name?: string;
 }
 
 export class SubmitTimesheetDto {
@@ -19,7 +45,7 @@ export class SubmitTimesheetDto {
 
 export class ReviewTimesheetDto {
   @ApiProperty({ enum: ['APPROVED', 'REJECTED'] })
-  @IsString()
+  @IsEnum(['APPROVED', 'REJECTED'])
   status: 'APPROVED' | 'REJECTED';
 
   @ApiPropertyOptional()
