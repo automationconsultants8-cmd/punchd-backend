@@ -230,7 +230,7 @@ export class TimeOffService {
     const enrichedRequests = await Promise.all(
       requests.map(async (request) => {
         const leaveType = this.mapTimeOffToLeaveType(request.timeOffType);
-        let balanceInfo = null;
+        let balanceInfo: any = null;
 
         if (leaveType) {
           const balance = await this.getWorkerBalance(request.requesterId, companyId, leaveType);
@@ -240,7 +240,7 @@ export class TimeOffService {
               total: balance.totalHours,
               used: balance.usedHours,
               available,
-              requested: request.hoursRequested || this.calculateHours(request.startDate, request.endDate),
+              requested: (request as any).hoursRequested || this.calculateHours(request.startDate, request.endDate),
             };
           }
         }
@@ -292,7 +292,7 @@ export class TimeOffService {
       throw new BadRequestException('Request has already been processed');
     }
 
-    const hoursRequested = request.hoursRequested || this.calculateHours(request.startDate, request.endDate);
+    const hoursRequested = (request as any).hoursRequested || this.calculateHours(request.startDate, request.endDate);
 
     // Deduct from leave balance if applicable
     const leaveType = this.mapTimeOffToLeaveType(request.timeOffType);
@@ -421,7 +421,7 @@ export class TimeOffService {
     }
 
     const wasApproved = request.status === 'APPROVED';
-    const hoursRequested = request.hoursRequested || this.calculateHours(request.startDate, request.endDate);
+    const hoursRequested = (request as any).hoursRequested || this.calculateHours(request.startDate, request.endDate);
 
     // If was approved, refund the leave balance
     let balanceRefunded = false;
