@@ -320,7 +320,6 @@ model Job {
 
   company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   timeEntries           TimeEntry[]
-  invoice           Invoice?
   shifts                Shift[]
   shiftTemplates        ShiftTemplate[] @relation("ShiftTemplateJob")
   workerJobRates        WorkerJobRate[]
@@ -448,6 +447,7 @@ model Timesheet {
   user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   reviewedBy        User?            @relation("TimesheetReviewer", fields: [reviewedById], references: [id])
   entries           TimeEntry[]
+  invoice           Invoice?
   
   @@index([companyId, userId])
   @@index([companyId, status])
