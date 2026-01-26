@@ -99,6 +99,9 @@ export class TimesheetsService {
       periodEnd.setHours(23, 59, 59, 999);
     } else {
       // Legacy: use date range
+      if (!dto.periodStart || !dto.periodEnd) {
+        throw new BadRequestException('Either entryIds or periodStart/periodEnd must be provided');
+      }
       periodStart = new Date(dto.periodStart);
       periodStart.setHours(0, 0, 0, 0);
       periodEnd = new Date(dto.periodEnd);
@@ -187,7 +190,7 @@ export class TimesheetsService {
       }
 
       // Unlink entries being removed
-      const entriesToRemove = currentEntryIds.filter(id => !dto.entryIds.includes(id));
+      const entriesToRemove = currentEntryIds.filter(id => !dto.entryIds!.includes(id));
       if (entriesToRemove.length > 0) {
         await this.prisma.timeEntry.updateMany({
           where: { id: { in: entriesToRemove } },
