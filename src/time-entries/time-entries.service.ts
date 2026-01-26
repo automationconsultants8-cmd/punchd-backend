@@ -1692,7 +1692,13 @@ export class TimeEntriesService {
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
   ): Promise<string> {
-    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED', isArchived: false };
+    const where: any = { 
+  companyId, 
+  clockOutTime: { not: null }, 
+  approvalStatus: 'APPROVED', 
+  isArchived: false,
+  workerType: { in: ['HOURLY', 'SALARIED'] },
+};
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
@@ -1774,7 +1780,13 @@ export class TimeEntriesService {
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
   ): Promise<string> {
-    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED', isArchived: false };
+   const where: any = { 
+  companyId, 
+  clockOutTime: { not: null }, 
+  approvalStatus: 'APPROVED', 
+  isArchived: false,
+  workerType: { in: ['HOURLY', 'SALARIED'] },
+};
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
@@ -1863,8 +1875,13 @@ export class TimeEntriesService {
   async exportToPaychex(
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
-  ): Promise<string> {
-    const where: any = { companyId, clockOutTime: { not: null }, approvalStatus: 'APPROVED', isArchived: false };
+  ): Promise<string> {const where: any = { 
+  companyId, 
+  clockOutTime: { not: null }, 
+  approvalStatus: 'APPROVED', 
+  isArchived: false,
+  workerType: { in: ['HOURLY', 'SALARIED'] },
+};
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
