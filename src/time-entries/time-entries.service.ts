@@ -1456,8 +1456,12 @@ export class TimeEntriesService {
       where: { id: companyId },
     });
 
-    const where: any = { companyId, clockOutTime: { not: null }, isArchived: false };
-
+    const where: any = { 
+  companyId, 
+  clockOutTime: { not: null }, 
+  isArchived: false,
+  workerType: { in: ['HOURLY', 'SALARIED'] },
+};
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
       if (filters.startDate) where.clockInTime.gte = filters.startDate;
@@ -1587,7 +1591,12 @@ export class TimeEntriesService {
     companyId: string,
     filters: { startDate?: Date; endDate?: Date }
   ): Promise<string> {
-    const where: any = { companyId, clockOutTime: { not: null }, isArchived: false };
+    const where: any = { 
+  companyId, 
+  clockOutTime: { not: null }, 
+  isArchived: false,
+  workerType: { in: ['HOURLY', 'SALARIED'] },
+};
 
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
