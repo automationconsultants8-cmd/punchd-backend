@@ -57,6 +57,7 @@ model Company {
   leaveBalances         LeaveBalance[]
   timesheets            Timesheet[]
   invoices              Invoice[]
+  documents Document[]
    
   @@map("companies")
 }
@@ -148,6 +149,7 @@ model User {
   volunteerSignOffRequests VolunteerSignOffRequest[]
   volunteerCertificates   VolunteerCertificate[]
   invoices                Invoice[]
+  documents Document[]
 
   @@unique([companyId, phone])
   @@index([companyId, email])
@@ -1014,4 +1016,36 @@ model Invoice {
   @@index([companyId, status])
   @@index([userId, status])
   @@map("invoices")
+}
+enum DocumentType {
+  W9
+  CONTRACT
+  ID
+  INSURANCE
+  LICENSE
+  OTHER
+}
+
+model Document {
+  id              String       @id @default(uuid())
+  companyId       String
+  userId          String
+  
+  filename        String
+  name            String
+  type            DocumentType @default(OTHER)
+  mimeType        String?
+  fileSize        Int?
+  fileUrl         String?
+  fileData        Bytes?
+  
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  company         Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([userId])
+  @@map("documents")
 }
