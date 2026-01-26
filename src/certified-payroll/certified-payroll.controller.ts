@@ -4,14 +4,14 @@ import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { FeatureGuard } from '../features/feature.guard';
 import { RequiresFeature } from '../features/feature.decorator';
-import { ComplianceReportsService } from './compliance-reports.service';
+import { CertifiedPayrollService } from './certified-payroll.service';
 
-@ApiTags('Compliance Reports')
-@Controller('compliance-reports')
+@ApiTags('Certified Payroll / Reports')
+@Controller('certified-payroll')
 @UseGuards(JwtAuthGuard, FeatureGuard)
 @ApiBearerAuth()
-export class ComplianceReportsController {
-  constructor(private readonly service: ComplianceReportsService) {}
+export class CertifiedPayrollController {
+  constructor(private readonly service: CertifiedPayrollService) {}
 
   // ============================================
   // JOBS
