@@ -2,7 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Re
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TimesheetsService } from './timesheets.service';
-import { CreateTimesheetDto, ReviewTimesheetDto } from './dto/timesheet.dto';
+import { CreateTimesheetDto, ReviewTimesheetDto, UpdateTimesheetDto } from './dto/timesheet.dto';
 
 @ApiTags('Timesheets')
 @ApiBearerAuth()
@@ -24,19 +24,27 @@ export class TimesheetsController {
     @Request() req,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('workerType') workerType?: string,
   ) {
     return this.timesheetsService.getUnsubmittedEntries(
       req.user.userId,
       req.user.companyId,
       startDate,
       endDate,
+      workerType,
     );
   }
 
   @Post()
-  @ApiOperation({ summary: 'Create a timesheet for a period' })
+  @ApiOperation({ summary: 'Create a timesheet with selected entries' })
   create(@Request() req, @Body() dto: CreateTimesheetDto) {
     return this.timesheetsService.create(req.user.userId, req.user.companyId, dto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update a draft timesheet (add/remove entries)' })
+  update(@Request() req, @Param('id') id: string, @Body() dto: UpdateTimesheetDto) {
+    return this.timesheetsService.update(id, req.user.userId, req.user.companyId, dto);
   }
 
   @Patch(':id/submit')
@@ -69,9 +77,10 @@ export class TimesheetsController {
   review(@Request() req, @Param('id') id: string, @Body() dto: ReviewTimesheetDto) {
     return this.timesheetsService.review(id, req.user.userId, req.user.companyId, dto);
   }
+
   @Delete(':id')
-@ApiOperation({ summary: 'Delete a draft timesheet' })
-delete(@Request() req, @Param('id') id: string) {
-  return this.timesheetsService.delete(id, req.user.userId, req.user.companyId);
-}
+  @ApiOperation({ summary: 'Delete a draft timesheet' })
+  delete(@Request() req, @Param('id') id: string) {
+    return this.timesheetsService.delete(id, req.user.userId, req.user.companyId);
+  }
 }
