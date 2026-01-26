@@ -50,6 +50,21 @@ export class VolunteerService {
       where: { userId },
     });
 
+    // Get company info for white-labeling
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+    });
+
+    // Get company owner/admin name for certificate signature
+    const companyOwner = await this.prisma.user.findFirst({
+      where: {
+        companyId,
+        role: 'ADMIN',
+      },
+      select: { name: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
     return {
       stats: {
         totalHours: Math.round(totalMinutes / 60 * 10) / 10,
@@ -67,6 +82,13 @@ export class VolunteerService {
         hours: e.durationMinutes ? Math.round(e.durationMinutes / 60 * 10) / 10 : 0,
         status: e.approvalStatus,
       })),
+      company: {
+        name: company?.name || 'Organization',
+        logoUrl: (company as any)?.logoUrl || null,
+        primaryColor: (company as any)?.primaryColor || '#1a1a2e',
+        accentColor: (company as any)?.accentColor || '#c9a227',
+        ownerName: companyOwner?.name || 'Program Director',
+      },
     };
   }
 
