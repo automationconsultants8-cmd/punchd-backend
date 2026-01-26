@@ -972,3 +972,43 @@ model VolunteerCertificate {
   @@index([companyId])
   @@map("volunteer_certificates")
 }
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id              String        @id @default(uuid())
+  companyId       String
+  userId          String
+  timesheetId     String        @unique
+  
+  invoiceNumber   String
+  dueDate         DateTime
+  
+  hourlyRate      Decimal       @db.Decimal(10, 2)
+  totalHours      Decimal       @db.Decimal(10, 2)
+  totalAmount     Decimal       @db.Decimal(10, 2)
+  
+  status          InvoiceStatus @default(PENDING)
+  notes           String?
+  
+  paidAt          DateTime?
+  paidAmount      Decimal?      @db.Decimal(10, 2)
+  paymentMethod   String?
+  paymentNotes    String?
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timesheet       Timesheet     @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([userId, status])
+  @@map("invoices")
+}
