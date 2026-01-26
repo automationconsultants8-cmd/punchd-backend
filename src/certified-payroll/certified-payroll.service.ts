@@ -199,8 +199,8 @@ export class CertifiedPayrollService {
     doc.fontSize(20).font('Helvetica-Bold').text(company?.name || 'Company', 50, 50);
     doc.fontSize(16).text('Client Billing Report', 50, 75);
     doc.fontSize(10).font('Helvetica')
-      .text(`Period: ${data.dateRange.startDate.toLocaleDateString()} - ${data.dateRange.endDate.toLocaleDateString()}`, 50, 95)
-      .text(`Generated: ${new Date().toLocaleString()}`, 50, 108);
+      .text(`Period: ${data.dateRange.startDate.toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })} - ${data.dateRange.endDate.toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })}`, 50, 95)
+      .text(`Generated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}`, 50, 108);
 
     let yPos = 140;
 
@@ -425,8 +425,8 @@ export class CertifiedPayrollService {
     doc.fontSize(18).font('Helvetica-Bold').text(company?.name || 'Company', 40, 30);
     doc.fontSize(14).text('Worker Summary Report', 40, 52);
     doc.fontSize(9).font('Helvetica')
-      .text(`Period: ${data.dateRange.startDate.toLocaleDateString()} - ${data.dateRange.endDate.toLocaleDateString()}`, 40, 70)
-      .text(`Generated: ${new Date().toLocaleString()}`, 40, 82);
+      .text(`Period: ${data.dateRange.startDate.toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })} - ${data.dateRange.endDate.toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })}`, 40, 70)
+      .text(`Generated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}`, 40, 82);
 
     let yPos = 110;
 
@@ -466,9 +466,9 @@ export class CertifiedPayrollService {
           yPos = 40;
         }
 
-        const dateStr = new Date(entry.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-        const clockInStr = new Date(entry.clockIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-        const clockOutStr = entry.clockOut ? new Date(entry.clockOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '--';
+        const dateStr = new Date(entry.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' });
+        const clockInStr = new Date(entry.clockIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' });
+        const clockOutStr = entry.clockOut ? new Date(entry.clockOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' }) : '--';
 
         doc.fillColor('#000');
         doc.text(dateStr, 40, yPos, { width: 70 });
@@ -711,7 +711,7 @@ export class CertifiedPayrollService {
     // Project info
     doc.text(`PAYROLL NO: ${payroll.payrollNumber}`, 400, 55);
     const weekEnd = new Date(payroll.weekEndingDate);
-    doc.text(`FOR WEEK ENDING: ${weekEnd.toLocaleDateString()}`, 500, 55);
+    doc.text(`FOR WEEK ENDING: ${weekEnd.toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })}`, 500, 55);
     
     const jobAddress = payroll.job?.address || reportData.jobAddress || 'N/A';
     const jobName = payroll.job?.name || reportData.jobName || 'N/A';
