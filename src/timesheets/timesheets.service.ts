@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateTimesheetDto, ReviewTimesheetDto } from './dto/timesheet.dto';
+import { CreateTimesheetDto, ReviewTimesheetDto, UpdateTimesheetDto } from './dto/timesheet.dto';
 
 @Injectable()
 export class TimesheetsService {
@@ -18,10 +18,14 @@ export class TimesheetsService {
             clockOutTime: true,
             durationMinutes: true,
             breakMinutes: true,
+            workerType: true,
           },
         },
         reviewedBy: {
           select: { id: true, name: true },
+        },
+        _count: {
+          select: { entries: true },
         },
       },
       orderBy: { periodStart: 'desc' },
@@ -59,46 +63,62 @@ export class TimesheetsService {
     return timesheet;
   }
 
-  // Create a draft timesheet for a period
+  // Create a draft timesheet with selected entries
   async create(userId: string, companyId: string, dto: CreateTimesheetDto) {
-    const periodStart = new Date(dto.periodStart);
-    periodStart.setHours(0, 0, 0, 0);
-    
-    const periodEnd = new Date(dto.periodEnd);
-    periodEnd.setHours(23, 59, 59, 999);
+    // If entryIds provided, use those; otherwise fall back to date range
+    let entries;
+    let periodStart: Date;
+    let periodEnd: Date;
 
-    // Check for overlapping timesheet
-    const existing = await this.prisma.timesheet.findFirst({
-      where: {
-        userId,
-        companyId,
-        OR: [
-          {
-            periodStart: { lte: periodEnd },
-            periodEnd: { gte: periodStart },
-          },
-        ],
-        status: { not: 'REJECTED' },
-      },
-    });
+    if (dto.entryIds && dto.entryIds.length > 0) {
+      // Validate entries belong to user and aren't in another timesheet
+      entries = await this.prisma.timeEntry.findMany({
+        where: {
+          id: { in: dto.entryIds },
+          userId,
+          companyId,
+          clockOutTime: { not: null },
+          timesheetId: null,
+          isArchived: false,
+        },
+      });
 
-    if (existing) {
-      throw new BadRequestException('A timesheet already exists for this period');
-    }
+      if (entries.length === 0) {
+        throw new BadRequestException('No valid time entries found');
+      }
 
-    // Get all time entries in this period that aren't already in a timesheet
-    const entries = await this.prisma.timeEntry.findMany({
-      where: {
-        userId,
-        companyId,
-        clockInTime: { gte: periodStart, lte: periodEnd },
-        clockOutTime: { not: null },
-        timesheetId: null,
-      },
-    });
+      if (entries.length !== dto.entryIds.length) {
+        throw new BadRequestException('Some entries are invalid, already in a timesheet, or archived');
+      }
 
-    if (entries.length === 0) {
-      throw new BadRequestException('No completed time entries found for this period');
+      // Calculate period from entries
+      const dates = entries.map(e => new Date(e.clockInTime).getTime());
+      periodStart = new Date(Math.min(...dates));
+      periodStart.setHours(0, 0, 0, 0);
+      periodEnd = new Date(Math.max(...dates));
+      periodEnd.setHours(23, 59, 59, 999);
+    } else {
+      // Legacy: use date range
+      periodStart = new Date(dto.periodStart);
+      periodStart.setHours(0, 0, 0, 0);
+      periodEnd = new Date(dto.periodEnd);
+      periodEnd.setHours(23, 59, 59, 999);
+
+      // Get all time entries in this period that aren't already in a timesheet
+      entries = await this.prisma.timeEntry.findMany({
+        where: {
+          userId,
+          companyId,
+          clockInTime: { gte: periodStart, lte: periodEnd },
+          clockOutTime: { not: null },
+          timesheetId: null,
+          isArchived: false,
+        },
+      });
+
+      if (entries.length === 0) {
+        throw new BadRequestException('No completed time entries found for this period');
+      }
     }
 
     // Calculate totals
@@ -115,6 +135,7 @@ export class TimesheetsService {
         totalMinutes,
         totalBreakMinutes,
         status: 'DRAFT',
+        name: dto.name || null,
       },
     });
 
@@ -127,10 +148,107 @@ export class TimesheetsService {
     return this.getById(timesheet.id, userId, companyId);
   }
 
+  // Update a draft timesheet (add/remove entries)
+  async update(timesheetId: string, userId: string, companyId: string, dto: UpdateTimesheetDto) {
+    const timesheet = await this.prisma.timesheet.findFirst({
+      where: { id: timesheetId, userId, companyId },
+      include: { entries: true },
+    });
+
+    if (!timesheet) {
+      throw new NotFoundException('Timesheet not found');
+    }
+
+    if (timesheet.status !== 'DRAFT') {
+      throw new BadRequestException('Only draft timesheets can be edited');
+    }
+
+    // Validate new entries
+    if (dto.entryIds && dto.entryIds.length > 0) {
+      const currentEntryIds = timesheet.entries.map(e => e.id);
+      const newEntryIds = dto.entryIds.filter(id => !currentEntryIds.includes(id));
+
+      // Validate new entries belong to user
+      if (newEntryIds.length > 0) {
+        const newEntries = await this.prisma.timeEntry.findMany({
+          where: {
+            id: { in: newEntryIds },
+            userId,
+            companyId,
+            clockOutTime: { not: null },
+            timesheetId: null,
+            isArchived: false,
+          },
+        });
+
+        if (newEntries.length !== newEntryIds.length) {
+          throw new BadRequestException('Some entries are invalid, already in another timesheet, or archived');
+        }
+      }
+
+      // Unlink entries being removed
+      const entriesToRemove = currentEntryIds.filter(id => !dto.entryIds.includes(id));
+      if (entriesToRemove.length > 0) {
+        await this.prisma.timeEntry.updateMany({
+          where: { id: { in: entriesToRemove } },
+          data: { timesheetId: null },
+        });
+      }
+
+      // Link new entries
+      if (newEntryIds.length > 0) {
+        await this.prisma.timeEntry.updateMany({
+          where: { id: { in: newEntryIds } },
+          data: { timesheetId: timesheetId },
+        });
+      }
+
+      // Get updated entries to recalculate totals
+      const updatedEntries = await this.prisma.timeEntry.findMany({
+        where: { timesheetId },
+      });
+
+      // Calculate new totals and period
+      const totalMinutes = updatedEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0);
+      const totalBreakMinutes = updatedEntries.reduce((sum, e) => sum + (e.breakMinutes || 0), 0);
+
+      let periodStart = timesheet.periodStart;
+      let periodEnd = timesheet.periodEnd;
+
+      if (updatedEntries.length > 0) {
+        const dates = updatedEntries.map(e => new Date(e.clockInTime).getTime());
+        periodStart = new Date(Math.min(...dates));
+        periodStart.setHours(0, 0, 0, 0);
+        periodEnd = new Date(Math.max(...dates));
+        periodEnd.setHours(23, 59, 59, 999);
+      }
+
+      await this.prisma.timesheet.update({
+        where: { id: timesheetId },
+        data: {
+          totalMinutes,
+          totalBreakMinutes,
+          periodStart,
+          periodEnd,
+          name: dto.name !== undefined ? dto.name : timesheet.name,
+        },
+      });
+    } else if (dto.name !== undefined) {
+      // Just updating name
+      await this.prisma.timesheet.update({
+        where: { id: timesheetId },
+        data: { name: dto.name },
+      });
+    }
+
+    return this.getById(timesheetId, userId, companyId);
+  }
+
   // Submit timesheet for approval
   async submit(timesheetId: string, userId: string, companyId: string) {
     const timesheet = await this.prisma.timesheet.findFirst({
       where: { id: timesheetId, userId, companyId },
+      include: { entries: true },
     });
 
     if (!timesheet) {
@@ -139,6 +257,10 @@ export class TimesheetsService {
 
     if (timesheet.status !== 'DRAFT') {
       throw new BadRequestException('Only draft timesheets can be submitted');
+    }
+
+    if (timesheet.entries.length === 0) {
+      throw new BadRequestException('Cannot submit an empty timesheet');
     }
 
     return this.prisma.timesheet.update({
@@ -189,6 +311,7 @@ export class TimesheetsService {
             clockInTime: true,
             clockOutTime: true,
             durationMinutes: true,
+            workerType: true,
           },
         },
       },
@@ -224,6 +347,18 @@ export class TimesheetsService {
       },
     });
 
+    // If approved, also approve all entries in the timesheet
+    if (dto.status === 'APPROVED') {
+      await this.prisma.timeEntry.updateMany({
+        where: { timesheetId },
+        data: { 
+          approvalStatus: 'APPROVED',
+          approvedById: reviewerId,
+          approvedAt: new Date(),
+        },
+      });
+    }
+
     // If rejected, unlink entries so they can be resubmitted
     if (dto.status === 'REJECTED') {
       await this.prisma.timeEntry.updateMany({
@@ -236,13 +371,25 @@ export class TimesheetsService {
   }
 
   // Get unsubmitted entries for a user (for creating new timesheet)
-  async getUnsubmittedEntries(userId: string, companyId: string, startDate?: string, endDate?: string) {
+  // Now filters by workerType if provided
+  async getUnsubmittedEntries(
+    userId: string, 
+    companyId: string, 
+    startDate?: string, 
+    endDate?: string,
+    workerType?: string,
+  ) {
     const where: any = {
       userId,
       companyId,
       clockOutTime: { not: null },
       timesheetId: null,
+      isArchived: false,
     };
+
+    if (workerType) {
+      where.workerType = workerType;
+    }
 
     if (startDate) {
       where.clockInTime = { ...where.clockInTime, gte: new Date(startDate) };
@@ -261,30 +408,31 @@ export class TimesheetsService {
       orderBy: { clockInTime: 'desc' },
     });
   }
+
   async delete(timesheetId: string, userId: string, companyId: string) {
-  const timesheet = await this.prisma.timesheet.findFirst({
-    where: { id: timesheetId, userId, companyId },
-  });
+    const timesheet = await this.prisma.timesheet.findFirst({
+      where: { id: timesheetId, userId, companyId },
+    });
 
-  if (!timesheet) {
-    throw new NotFoundException('Timesheet not found');
+    if (!timesheet) {
+      throw new NotFoundException('Timesheet not found');
+    }
+
+    if (timesheet.status !== 'DRAFT') {
+      throw new BadRequestException('Only draft timesheets can be deleted');
+    }
+
+    // Unlink entries
+    await this.prisma.timeEntry.updateMany({
+      where: { timesheetId },
+      data: { timesheetId: null },
+    });
+
+    // Delete timesheet
+    await this.prisma.timesheet.delete({
+      where: { id: timesheetId },
+    });
+
+    return { success: true };
   }
-
-  if (timesheet.status !== 'DRAFT') {
-    throw new BadRequestException('Only draft timesheets can be deleted');
-  }
-
-  // Unlink entries
-  await this.prisma.timeEntry.updateMany({
-    where: { timesheetId },
-    data: { timesheetId: null },
-  });
-
-  // Delete timesheet
-  await this.prisma.timesheet.delete({
-    where: { id: timesheetId },
-  });
-
-  return { success: true };
- }
 }
