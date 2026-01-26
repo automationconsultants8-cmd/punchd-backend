@@ -81,6 +81,11 @@ export class VolunteerController {
     return this.volunteerService.generateCertificate(req.user.userId, req.user.companyId);
   }
 
+  @Delete('certificates/:id')
+  async deleteCertificate(@Param('id') id: string, @Request() req) {
+    return this.volunteerService.deleteCertificate(id, req.user.userId);
+  }
+
   // ============================================
   // ADMIN ENDPOINTS (for admin dashboard)
   // ============================================
@@ -138,6 +143,11 @@ export class VolunteerController {
   @Get('admin/certificates')
   async getAllCertificates(@Request() req) {
     return this.volunteerService.getAllCertificates(req.user.companyId);
+  }
+
+  @Delete('admin/certificates/:id')
+  async adminDeleteCertificate(@Param('id') id: string, @Request() req) {
+    return this.volunteerService.adminDeleteCertificate(id, req.user.companyId);
   }
 
   @Get('admin/certificate-threshold')
