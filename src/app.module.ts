@@ -27,6 +27,7 @@ import { TasksModule } from './tasks/tasks.module';
 import { TimesheetsModule } from './timesheets/timesheets.module';
 import { VolunteerModule } from './volunteer/volunteer.module';
 import { ShiftTemplatesModule } from './shift-templates/shift-templates.module';
+import { InvoicesModule } from './invoices/invoices.module';
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { ShiftTemplatesModule } from './shift-templates/shift-templates.module';
     TimesheetsModule,
     VolunteerModule,
     ShiftTemplatesModule,
+    InvoicesModule,
   ],
 })
 export class AppModule {}
