@@ -1037,8 +1037,13 @@ export class TimeEntriesService {
   }
 
   // FIXED: Added isArchived: false filter
-  async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
-    const where: any = { companyId, clockOutTime: { not: null }, isArchived: false };
+ async getOvertimeSummary(companyId: string, filters: { startDate?: Date; endDate?: Date }) {
+    const where: any = { 
+      companyId, 
+      clockOutTime: { not: null }, 
+      isArchived: false,
+      workerType: { in: ['HOURLY', 'SALARIED'] },
+    };
     if (filters.startDate || filters.endDate) {
       where.clockInTime = {};
       if (filters.startDate) where.clockInTime.gte = filters.startDate;
