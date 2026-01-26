@@ -3,10 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import * as PDFDocument from 'pdfkit';
 
-type ReportType = 'CLIENT_BILLING' | 'WORKER_SUMMARY' | 'WH347';
-
 @Injectable()
-export class ComplianceReportsService {
+export class CertifiedPayrollService {
   constructor(
     private prisma: PrismaService,
     private auditService: AuditService,
@@ -48,19 +46,23 @@ export class ComplianceReportsService {
       jobId?: string;
       startDate: Date;
       endDate: Date;
-      billRate?: number; // Override bill rate
+      billRate?: number;
     }
   ) {
     const { jobId, startDate, endDate, billRate } = params;
 
-    // Get time entries
+    // Ensure endDate includes the full day
+    const adjustedEndDate = new Date(endDate);
+    adjustedEndDate.setHours(23, 59, 59, 999);
+
+    // Get time entries - only APPROVED, only HOURLY/SALARIED
     const where: any = {
       companyId,
       clockOutTime: { not: null },
       approvalStatus: 'APPROVED',
       isArchived: false,
       workerType: { in: ['HOURLY', 'SALARIED'] },
-      clockInTime: { gte: startDate, lte: endDate },
+      clockInTime: { gte: startDate, lte: adjustedEndDate },
     };
 
     if (jobId) {
@@ -97,7 +99,6 @@ export class ComplianceReportsService {
 
     for (const entry of entries) {
       const jid = entry.jobId || 'unassigned';
-      const jobName = entry.job?.name || 'Unassigned';
 
       if (!byJob[jid]) {
         byJob[jid] = {
@@ -143,8 +144,8 @@ export class ComplianceReportsService {
       byJob[jid].totalLaborCost += cost;
 
       // Calculate billable amount
-      const rate = billRate || entry.job?.defaultHourlyRate || entry.user?.hourlyRate || 0;
-      const billableAmount = totalHrs * Number(rate);
+      const rate = billRate || (entry.job?.defaultHourlyRate ? Number(entry.job.defaultHourlyRate) : 0) || (entry.user?.hourlyRate ? Number(entry.user.hourlyRate) : 0);
+      const billableAmount = totalHrs * rate;
       byJob[jid].totalBillable += billableAmount;
     }
 
@@ -229,7 +230,6 @@ export class ComplianceReportsService {
       doc.text('DT', 310, yPos, { width: 50, align: 'right' });
       doc.text('Total Hrs', 360, yPos, { width: 60, align: 'right' });
       doc.text('Cost', 420, yPos, { width: 70, align: 'right' });
-      doc.text('Billable', 490, yPos, { width: 70, align: 'right' });
       
       yPos += 4;
       doc.moveTo(50, yPos + 10).lineTo(560, yPos + 10).stroke('#ccc');
@@ -249,8 +249,6 @@ export class ComplianceReportsService {
         doc.text(worker.doubleTimeHours.toFixed(1), 310, yPos, { width: 50, align: 'right' });
         doc.text(worker.totalHours.toFixed(1), 360, yPos, { width: 60, align: 'right' });
         doc.text(`$${worker.laborCost.toFixed(2)}`, 420, yPos, { width: 70, align: 'right' });
-        // Billable = totalHours * job rate (simplified)
-        doc.text(`$${worker.laborCost.toFixed(2)}`, 490, yPos, { width: 70, align: 'right' });
         yPos += 16;
       }
 
@@ -264,7 +262,6 @@ export class ComplianceReportsService {
       doc.text(jobData.totalDoubleTimeHours.toFixed(1), 310, yPos, { width: 50, align: 'right' });
       doc.text(jobData.totalHours.toFixed(1), 360, yPos, { width: 60, align: 'right' });
       doc.text(`$${jobData.totalLaborCost.toFixed(2)}`, 420, yPos, { width: 70, align: 'right' });
-      doc.text(`$${jobData.totalBillable.toFixed(2)}`, 490, yPos, { width: 70, align: 'right' });
       
       yPos += 30;
     }
@@ -281,7 +278,6 @@ export class ComplianceReportsService {
     doc.text('GRAND TOTAL', 55, yPos);
     doc.text(`${data.grandTotal.totalHours.toFixed(1)} hrs`, 360, yPos, { width: 60, align: 'right' });
     doc.text(`$${data.grandTotal.laborCost.toFixed(2)}`, 420, yPos, { width: 70, align: 'right' });
-    doc.text(`$${data.grandTotal.billable.toFixed(2)}`, 490, yPos, { width: 70, align: 'right' });
 
     doc.end();
 
@@ -307,13 +303,17 @@ export class ComplianceReportsService {
   ) {
     const { workerId, jobId, startDate, endDate } = params;
 
+    // Ensure endDate includes the full day
+    const adjustedEndDate = new Date(endDate);
+    adjustedEndDate.setHours(23, 59, 59, 999);
+
     const where: any = {
       companyId,
       clockOutTime: { not: null },
       approvalStatus: 'APPROVED',
       isArchived: false,
       workerType: { in: ['HOURLY', 'SALARIED'] },
-      clockInTime: { gte: startDate, lte: endDate },
+      clockInTime: { gte: startDate, lte: adjustedEndDate },
     };
 
     if (workerId) where.userId = workerId;
@@ -524,10 +524,7 @@ export class ComplianceReportsService {
         id: true,
         name: true,
         address: true,
-        city: true,
-        state: true,
         projectNumber: true,
-        wageDecisionNumber: true,
       },
       orderBy: { name: 'asc' },
     });
@@ -568,9 +565,6 @@ export class ComplianceReportsService {
             phone: true,
             hourlyRate: true,
             address: true,
-            city: true,
-            state: true,
-            zipCode: true,
             lastFourSSN: true,
             tradeClassification: true,
           },
@@ -593,14 +587,12 @@ export class ComplianceReportsService {
 
     for (const entry of entries) {
       const wid = entry.userId;
+      const user = entry.user;
       
       if (!workerMap[wid]) {
-        const user = entry.user;
-        const addressParts = [user?.address, user?.city, user?.state, user?.zipCode].filter(Boolean);
-        
         workerMap[wid] = {
           name: user?.name || 'Unknown',
-          address: addressParts.length > 0 ? addressParts.join(', ') : 'Address not provided',
+          address: user?.address || 'Address not provided',
           lastFourSSN: user?.lastFourSSN || 'XXXX',
           tradeClassification: user?.tradeClassification || '',
           hourlyRate: user?.hourlyRate ? Number(user.hourlyRate) : 0,
@@ -648,7 +640,7 @@ export class ComplianceReportsService {
 
     const payrollNumber = (lastPayroll?.payrollNumber || 0) + 1;
 
-    // Create certified payroll record
+    // Create certified payroll record - use reportData (JSON field) to store worker data
     const certifiedPayroll = await this.prisma.certifiedPayroll.create({
       data: {
         companyId,
@@ -656,9 +648,13 @@ export class ComplianceReportsService {
         payrollNumber,
         weekEndingDate,
         status: 'DRAFT',
-        workerData: preview.workers,
-        totalGrossPay: preview.totalGrossPay,
-        createdById: userId,
+        reportData: {
+          workers: preview.workers,
+          totalGrossPay: preview.totalGrossPay,
+          jobName: preview.job.name,
+          jobAddress: preview.job.address,
+          projectNumber: preview.job.projectNumber,
+        },
       },
       include: { job: true },
     });
@@ -683,7 +679,7 @@ export class ComplianceReportsService {
   async generateWH347PDF(payrollId: string, companyId: string): Promise<Buffer> {
     const payroll = await this.prisma.certifiedPayroll.findFirst({
       where: { id: payrollId, companyId },
-      include: { job: true, createdBy: true },
+      include: { job: true },
     });
 
     if (!payroll) {
@@ -693,6 +689,10 @@ export class ComplianceReportsService {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
     });
+
+    // Extract data from reportData JSON
+    const reportData = payroll.reportData as any || {};
+    const workers = reportData.workers || [];
 
     const doc = new PDFDocument({ size: 'LETTER', layout: 'landscape', margin: 30 });
     const chunks: Buffer[] = [];
@@ -713,10 +713,12 @@ export class ComplianceReportsService {
     const weekEnd = new Date(payroll.weekEndingDate);
     doc.text(`FOR WEEK ENDING: ${weekEnd.toLocaleDateString()}`, 500, 55);
     
-    const jobAddress = [payroll.job?.address, payroll.job?.city, payroll.job?.state].filter(Boolean).join(', ');
-    doc.text(`PROJECT AND LOCATION: ${payroll.job?.name} - ${jobAddress || 'N/A'}`, 30, 85);
-    doc.text(`PROJECT OR CONTRACT NO: ${payroll.job?.projectNumber || 'N/A'}`, 30, 97);
-    doc.text(`WAGE DECISION NO: ${(payroll.job as any)?.wageDecisionNumber || 'N/A'}`, 300, 97);
+    const jobAddress = payroll.job?.address || reportData.jobAddress || 'N/A';
+    const jobName = payroll.job?.name || reportData.jobName || 'N/A';
+    const projectNumber = payroll.job?.projectNumber || reportData.projectNumber || 'N/A';
+    
+    doc.text(`PROJECT AND LOCATION: ${jobName} - ${jobAddress}`, 30, 85);
+    doc.text(`PROJECT OR CONTRACT NO: ${projectNumber}`, 30, 97);
 
     // Table header
     let yPos = 120;
@@ -742,7 +744,6 @@ export class ComplianceReportsService {
     yPos += 20;
 
     // Workers
-    const workers = (payroll.workerData as any[]) || [];
     doc.font('Helvetica').fontSize(7);
 
     for (const worker of workers) {
@@ -756,8 +757,8 @@ export class ComplianceReportsService {
 
       // Name, address, SSN
       doc.text(worker.name, 35, yPos + 4, { width: 175 });
-      doc.fontSize(6).text(worker.address.substring(0, 40), 35, yPos + 14, { width: 175 });
-      doc.text(`XXX-XX-${worker.lastFourSSN}`, 35, yPos + 24, { width: 175 });
+      doc.fontSize(6).text((worker.address || '').substring(0, 40), 35, yPos + 14, { width: 175 });
+      doc.text(`XXX-XX-${worker.lastFourSSN || 'XXXX'}`, 35, yPos + 24, { width: 175 });
       doc.fontSize(7);
 
       // Trade
@@ -765,16 +766,16 @@ export class ComplianceReportsService {
 
       // Daily hours
       dayX = 275;
-      worker.dailyHours.forEach((hrs: number, i: number) => {
+      (worker.dailyHours || [0,0,0,0,0,0,0]).forEach((hrs: number, i: number) => {
         doc.text(hrs > 0 ? hrs.toFixed(1) : '-', dayX + (i * 25), yPos + 12, { width: 20, align: 'center' });
       });
 
       // Totals
-      doc.text(worker.totalHours.toFixed(1), 455, yPos + 12, { width: 35, align: 'center' });
-      doc.text(`$${worker.hourlyRate.toFixed(2)}`, 495, yPos + 12, { width: 45, align: 'center' });
-      doc.text(`$${worker.grossPay.toFixed(2)}`, 545, yPos + 12, { width: 50, align: 'center' });
+      doc.text((worker.totalHours || 0).toFixed(1), 455, yPos + 12, { width: 35, align: 'center' });
+      doc.text(`$${(worker.hourlyRate || 0).toFixed(2)}`, 495, yPos + 12, { width: 45, align: 'center' });
+      doc.text(`$${(worker.grossPay || 0).toFixed(2)}`, 545, yPos + 12, { width: 50, align: 'center' });
       doc.text('$0.00', 600, yPos + 12, { width: 40, align: 'center' });
-      doc.text(`$${worker.grossPay.toFixed(2)}`, 645, yPos + 12, { width: 55, align: 'center' });
+      doc.text(`$${(worker.grossPay || 0).toFixed(2)}`, 645, yPos + 12, { width: 55, align: 'center' });
 
       yPos += rowHeight;
     }
@@ -783,7 +784,7 @@ export class ComplianceReportsService {
     doc.rect(30, yPos, 732, 20).fill('#f0f0f0').stroke();
     doc.fillColor('#000').font('Helvetica-Bold').fontSize(8);
     doc.text('TOTALS:', 35, yPos + 6);
-    const totalGross = workers.reduce((sum, w) => sum + w.grossPay, 0);
+    const totalGross = workers.reduce((sum: number, w: any) => sum + (w.grossPay || 0), 0);
     doc.text(`$${totalGross.toFixed(2)}`, 545, yPos + 6, { width: 50, align: 'center' });
     doc.text('$0.00', 600, yPos + 6, { width: 40, align: 'center' });
     doc.text(`$${totalGross.toFixed(2)}`, 645, yPos + 6, { width: 55, align: 'center' });
@@ -813,14 +814,19 @@ export class ComplianceReportsService {
   // ============================================
 
   async getPayrollHistory(companyId: string) {
-    return this.prisma.certifiedPayroll.findMany({
+    const payrolls = await this.prisma.certifiedPayroll.findMany({
       where: { companyId },
       include: {
         job: { select: { id: true, name: true, projectNumber: true } },
-        createdBy: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Map to include createdBy info from reportData if needed
+    return payrolls.map(p => ({
+      ...p,
+      // Extract any needed data from reportData
+    }));
   }
 
   async submitPayroll(payrollId: string, companyId: string, userId: string) {
@@ -841,7 +847,7 @@ export class ComplianceReportsService {
       data: {
         status: 'SUBMITTED',
         submittedAt: new Date(),
-        submittedById: userId,
+        submittedBy: userId,
       },
     });
   }
