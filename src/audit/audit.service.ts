@@ -48,11 +48,6 @@ export class AuditService {
 
     return this.prisma.auditLog.findMany({
       where,
-      include: {
-        user: {
-          select: { id: true, name: true, email: true }
-        }
-      },
       orderBy: { createdAt: 'desc' },
       take: filters?.limit || 100,
     });
@@ -72,11 +67,6 @@ export class AuditService {
   async findByTarget(targetType: string, targetId: string) {
     return this.prisma.auditLog.findMany({
       where: { targetType, targetId },
-      include: {
-        user: {
-          select: { id: true, name: true, email: true }
-        }
-      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -87,19 +77,19 @@ export class AuditService {
       this.prisma.auditLog.count({ 
         where: { 
           companyId, 
-          action: { in: ['USER_CREATED', 'TIME_ENTRY_CREATED', 'JOB_CREATED', 'SHIFT_CREATED', 'TIME_OFF_REQUEST_CREATED'] }
+          action: { in: ['USER_CREATED', 'JOB_CREATED', 'SHIFT_CREATED', 'TIME_OFF_REQUEST_CREATED'] as AuditAction[] }
         } 
       }),
       this.prisma.auditLog.count({ 
         where: { 
           companyId, 
-          action: { in: ['USER_UPDATED', 'TIME_ENTRY_EDITED', 'TIME_ENTRY_APPROVED', 'TIME_ENTRY_REJECTED', 'SHIFT_REQUEST_APPROVED'] }
+          action: { in: ['USER_UPDATED', 'TIME_ENTRY_EDITED', 'TIME_ENTRY_APPROVED', 'TIME_ENTRY_REJECTED', 'SHIFT_REQUEST_APPROVED'] as AuditAction[] }
         } 
       }),
       this.prisma.auditLog.count({ 
         where: { 
           companyId, 
-          action: { in: ['USER_DELETED', 'TIME_ENTRY_ARCHIVED', 'SHIFT_DELETED'] }
+          action: { in: ['TIME_ENTRY_ARCHIVED'] as AuditAction[] }
         } 
       }),
     ]);
