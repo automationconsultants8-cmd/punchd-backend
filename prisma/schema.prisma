@@ -58,7 +58,9 @@ model Company {
   timesheets            Timesheet[]
   invoices              Invoice[]
   documents Document[]
-   
+  logoUrl       String?
+  primaryColor  String?  @default("#1a1a2e")
+  accentColor   String?  @default("#c9a227")
   @@map("companies")
 }
 
