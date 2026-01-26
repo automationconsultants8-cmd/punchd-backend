@@ -470,6 +470,31 @@ export class VolunteerService {
     });
   }
 
+  async deleteCertificate(certId: string, userId: string) {
+    const cert = await this.prisma.volunteerCertificate.findUnique({
+      where: { id: certId },
+    });
+    
+    if (!cert) throw new NotFoundException('Certificate not found');
+    if (cert.userId !== userId) throw new BadRequestException('You can only delete your own certificates');
+    
+    return this.prisma.volunteerCertificate.delete({
+      where: { id: certId },
+    });
+  }
+
+  async adminDeleteCertificate(certId: string, companyId: string) {
+    const cert = await this.prisma.volunteerCertificate.findFirst({
+      where: { id: certId, companyId },
+    });
+    
+    if (!cert) throw new NotFoundException('Certificate not found');
+    
+    return this.prisma.volunteerCertificate.delete({
+      where: { id: certId },
+    });
+  }
+
   async getCertificateThreshold(companyId: string) {
     // Return hardcoded default for now
     return { threshold: DEFAULT_CERTIFICATE_THRESHOLD };
