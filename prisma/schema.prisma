@@ -424,6 +424,7 @@ model Timesheet {
   id                String           @id @default(uuid())
   companyId         String
   userId            String
+  name              String?
   
   periodStart       DateTime
   periodEnd         DateTime
