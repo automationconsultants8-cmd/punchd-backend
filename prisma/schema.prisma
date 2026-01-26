@@ -48,6 +48,7 @@ model Company {
   certifiedPayrolls     CertifiedPayroll[]
   shiftRequests         ShiftRequest[]
   timeOffRequests       TimeOffRequest[]
+  hoursRequested  Float?
   messages              Message[]
   managerPermissions    ManagerPermission[]
   managerLocationAssignments ManagerLocationAssignment[]
