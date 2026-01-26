@@ -1,6 +1,6 @@
 // Save as: backend/src/volunteer/volunteer.controller.ts
 
-import { Controller, Get, Post, Delete, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request, Query } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VolunteerService } from './volunteer.service';
@@ -105,6 +105,11 @@ export class VolunteerController {
     return this.volunteerService.getAllPendingSignOffs(req.user.companyId);
   }
 
+  @Get('admin/sign-offs/:id')
+  async getSignOffById(@Param('id') id: string, @Request() req) {
+    return this.volunteerService.getSignOffById(id, req.user.companyId);
+  }
+
   @Post('admin/entries/approve')
   async bulkApproveEntries(@Request() req, @Body() body: { entryIds: string[] }) {
     return this.volunteerService.bulkApproveEntries(body.entryIds, req.user.userId);
@@ -120,6 +125,11 @@ export class VolunteerController {
     return this.volunteerService.approveSignOff(id, req.user.userId);
   }
 
+  @Post('admin/sign-offs/:id/reject')
+  async rejectSignOff(@Param('id') id: string, @Request() req, @Body() body: { reason: string }) {
+    return this.volunteerService.rejectSignOff(id, req.user.userId, body.reason);
+  }
+
   @Post('admin/certificates/generate/:userId')
   async generateCertificateForUser(@Param('userId') userId: string, @Request() req) {
     return this.volunteerService.generateCertificateForUser(userId, req.user.companyId);
@@ -128,5 +138,15 @@ export class VolunteerController {
   @Get('admin/certificates')
   async getAllCertificates(@Request() req) {
     return this.volunteerService.getAllCertificates(req.user.companyId);
+  }
+
+  @Get('admin/certificate-threshold')
+  async getCertificateThreshold(@Request() req) {
+    return this.volunteerService.getCertificateThreshold(req.user.companyId);
+  }
+
+  @Patch('admin/certificate-threshold')
+  async setCertificateThreshold(@Request() req, @Body() body: { hours: number }) {
+    return this.volunteerService.setCertificateThreshold(req.user.companyId, body.hours);
   }
 }
