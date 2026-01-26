@@ -416,43 +416,8 @@ export class TimeOffService {
       throw new ForbiddenException('You can only cancel your own requests');
     }
 
-    if (request.status !== 'PENDING' && request.status !== 'APPROVED') {
-      throw new BadRequestException('This request cannot be cancelled');
-    }
-
-    const wasApproved = request.status === 'APPROVED';
-    const hoursRequested = (request as any).hoursRequested || this.calculateHours(request.startDate, request.endDate);
-
-    // If was approved, refund the leave balance
-    let balanceRefunded = false;
-    let newBalance: any = null;
-
-    if (wasApproved) {
-      const leaveType = this.mapTimeOffToLeaveType(request.timeOffType);
-      
-      if (leaveType) {
-        const balance = await this.getWorkerBalance(request.requesterId, request.companyId, leaveType);
-        
-        if (balance) {
-          // Refund the hours
-          const updated = await this.prisma.leaveBalance.update({
-            where: { id: balance.id },
-            data: {
-              usedHours: Math.max(0, balance.usedHours - hoursRequested),
-            },
-          });
-          
-          balanceRefunded = true;
-          newBalance = {
-            total: updated.totalHours,
-            used: updated.usedHours,
-            available: updated.totalHours - updated.usedHours,
-            refunded: hoursRequested,
-          };
-
-          console.log(`📅 Leave balance refunded: ${hoursRequested}h returned to ${leaveType}. New balance: ${newBalance.available}h available`);
-        }
-      }
+    if (request.status !== 'PENDING') {
+      throw new BadRequestException('Only pending requests can be cancelled. Contact your admin to cancel approved requests.');
     }
 
     const updated = await this.prisma.timeOffRequest.update({
@@ -469,19 +434,10 @@ export class TimeOffService {
       action: 'TIME_OFF_REQUEST_CANCELLED',
       targetType: 'TimeOffRequest',
       targetId: id,
-      details: {
-        wasApproved,
-        balanceRefunded,
-        hoursRefunded: balanceRefunded ? hoursRequested : 0,
-        newBalance,
-      },
+      details: {},
     });
 
-    return {
-      ...updated,
-      balanceRefunded,
-      newBalance,
-    };
+    return updated;
   }
 
   async getStats(companyId: string) {
