@@ -28,7 +28,6 @@ export class AuditService {
     });
   }
 
-  // Keep original method name for existing controller
   async getAuditLogs(companyId: string, filters?: {
     action?: AuditAction;
     userId?: string;
@@ -37,7 +36,7 @@ export class AuditService {
     limit?: number;
   }) {
     const where: any = { companyId };
-
+    
     if (filters?.action) where.action = filters.action;
     if (filters?.userId) where.userId = filters.userId;
     
@@ -49,6 +48,11 @@ export class AuditService {
 
     return this.prisma.auditLog.findMany({
       where,
+      include: {
+        user: {
+          select: { id: true, name: true, email: true }
+        }
+      },
       orderBy: { createdAt: 'desc' },
       take: filters?.limit || 100,
     });
@@ -68,7 +72,38 @@ export class AuditService {
   async findByTarget(targetType: string, targetId: string) {
     return this.prisma.auditLog.findMany({
       where: { targetType, targetId },
+      include: {
+        user: {
+          select: { id: true, name: true, email: true }
+        }
+      },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  async getStats(companyId: string) {
+    const [total, creates, updates, deletes] = await Promise.all([
+      this.prisma.auditLog.count({ where: { companyId } }),
+      this.prisma.auditLog.count({ 
+        where: { 
+          companyId, 
+          action: { in: ['USER_CREATED', 'TIME_ENTRY_CREATED', 'JOB_CREATED', 'SHIFT_CREATED', 'TIME_OFF_REQUEST_CREATED'] }
+        } 
+      }),
+      this.prisma.auditLog.count({ 
+        where: { 
+          companyId, 
+          action: { in: ['USER_UPDATED', 'TIME_ENTRY_EDITED', 'TIME_ENTRY_APPROVED', 'TIME_ENTRY_REJECTED', 'SHIFT_REQUEST_APPROVED'] }
+        } 
+      }),
+      this.prisma.auditLog.count({ 
+        where: { 
+          companyId, 
+          action: { in: ['USER_DELETED', 'TIME_ENTRY_ARCHIVED', 'SHIFT_DELETED'] }
+        } 
+      }),
+    ]);
+
+    return { total, creates, updates, deletes };
   }
 }
