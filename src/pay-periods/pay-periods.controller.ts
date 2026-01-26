@@ -12,7 +12,15 @@ import { PayPeriodsService } from './pay-periods.service';
 export class PayPeriodsController {
   constructor(private readonly payPeriodsService: PayPeriodsService) {}
 
-  private checkAccess(req: any) {
+  // Read access - owners, admins, and managers can view
+  private checkReadAccess(req: any) {
+    if (req.user.role !== 'OWNER' && req.user.role !== 'ADMIN' && req.user.role !== 'MANAGER') {
+      throw new ForbiddenException('Only owners, admins, and managers can view pay periods');
+    }
+  }
+
+  // Write access - only owners and admins can modify
+  private checkWriteAccess(req: any) {
     if (req.user.role !== 'OWNER' && req.user.role !== 'ADMIN') {
       throw new ForbiddenException('Only owners and admins can manage pay periods');
     }
@@ -25,7 +33,7 @@ export class PayPeriodsController {
   @Get('settings')
   @ApiOperation({ summary: 'Get pay period settings' })
   async getSettings(@Request() req) {
-    this.checkAccess(req);
+    this.checkReadAccess(req);
     return this.payPeriodsService.getSettings(req.user.companyId);
   }
 
@@ -40,7 +48,7 @@ export class PayPeriodsController {
       customPayPeriodDays?: number;
     },
   ) {
-    this.checkAccess(req);
+    this.checkWriteAccess(req);
     return this.payPeriodsService.configureSettings(
       req.user.companyId,
       req.user.userId,
@@ -61,7 +69,7 @@ export class PayPeriodsController {
     @Query('status') status?: string,
     @Query('limit') limit?: string,
   ) {
-    this.checkAccess(req);
+    this.checkReadAccess(req);
     return this.payPeriodsService.getPayPeriods(req.user.companyId, {
       status,
       limit: limit ? parseInt(limit) : undefined,
@@ -71,7 +79,7 @@ export class PayPeriodsController {
   @Get('current')
   @ApiOperation({ summary: 'Get current pay period' })
   async getCurrentPayPeriod(@Request() req) {
-    this.checkAccess(req);
+    this.checkReadAccess(req);
     return this.payPeriodsService.getCurrentPayPeriod(req.user.companyId);
   }
 
@@ -81,7 +89,7 @@ export class PayPeriodsController {
     @Request() req,
     @Body() body: { startDate: string; endDate: string },
   ) {
-    this.checkAccess(req);
+    this.checkWriteAccess(req);
     return this.payPeriodsService.createPayPeriod(
       req.user.companyId,
       req.user.userId,
@@ -95,14 +103,14 @@ export class PayPeriodsController {
   @Get(':id')
   @ApiOperation({ summary: 'Get pay period details' })
   async getPayPeriodDetails(@Request() req, @Param('id') id: string) {
-    this.checkAccess(req);
+    this.checkReadAccess(req);
     return this.payPeriodsService.getPayPeriodDetails(req.user.companyId, id);
   }
 
   @Post(':id/lock')
   @ApiOperation({ summary: 'Lock a pay period' })
   async lockPayPeriod(@Request() req, @Param('id') id: string) {
-    this.checkAccess(req);
+    this.checkWriteAccess(req);
     return this.payPeriodsService.lockPayPeriod(
       req.user.companyId,
       req.user.userId,
@@ -118,7 +126,7 @@ export class PayPeriodsController {
     @Param('id') id: string,
     @Body() body: { reason: string },
   ) {
-    this.checkAccess(req);
+    this.checkWriteAccess(req);
     return this.payPeriodsService.unlockPayPeriod(
       req.user.companyId,
       req.user.userId,
@@ -131,7 +139,7 @@ export class PayPeriodsController {
   @Post(':id/mark-exported')
   @ApiOperation({ summary: 'Mark pay period as exported' })
   async markAsExported(@Request() req, @Param('id') id: string) {
-    this.checkAccess(req);
+    this.checkWriteAccess(req);
     return this.payPeriodsService.markAsExported(
       req.user.companyId,
       req.user.userId,
@@ -165,7 +173,7 @@ export class PayPeriodsController {
     @Param('id') id: string,
     @Query('format') format: string = 'CSV',
   ) {
-    this.checkAccess(req);
+    this.checkReadAccess(req);
     
     const data = await this.payPeriodsService.exportPayPeriod(req.user.companyId, id, format);
 
