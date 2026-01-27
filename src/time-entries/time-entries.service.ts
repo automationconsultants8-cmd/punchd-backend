@@ -109,7 +109,7 @@ export class TimeEntriesService {
 
         if (now < earliestClockIn) {
           const minutesUntilAllowed = Math.ceil((earliestClockIn.getTime() - now.getTime()) / 1000 / 60);
-          const shiftTimeStr = shiftStartTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const shiftTimeStr = shiftStartTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' });
 
           if (toggles.earlyClockInRestriction === 'strict') {
             throw new ForbiddenException(
@@ -1193,10 +1193,10 @@ export class TimeEntriesService {
 
     sheet.mergeCells('A2:L2');
     const startStr = filters.startDate
-      ? new Date(filters.startDate).toLocaleDateString()
+      ? new Date(filters.startDate).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })
       : 'All Time';
     const endStr = filters.endDate
-      ? new Date(filters.endDate).toLocaleDateString()
+      ? new Date(filters.endDate).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })
       : 'Present';
     sheet.getCell('A2').value = `Period: ${startStr} - ${endStr}`;
 
@@ -1212,10 +1212,10 @@ export class TimeEntriesService {
     for (const entry of entries) {
       sheet.addRow([
         entry.user?.name || 'Unknown',
-        entry.clockInTime ? new Date(entry.clockInTime).toLocaleDateString() : '-',
+        entry.clockInTime ? new Date(entry.clockInTime).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' }) : '-',
         entry.job?.name || 'Unassigned',
-        entry.clockInTime ? new Date(entry.clockInTime).toLocaleTimeString() : '-',
-        entry.clockOutTime ? new Date(entry.clockOutTime).toLocaleTimeString() : 'Active',
+        entry.clockInTime ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles' }) : '-',
+        entry.clockOutTime ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles' }) : 'Active',
         entry.breakMinutes || 0,
         ((entry.regularMinutes || 0) / 60).toFixed(2),
         ((entry.overtimeMinutes || 0) / 60).toFixed(2),
@@ -1373,10 +1373,10 @@ export class TimeEntriesService {
           ? new Date(entry.clockInTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
           : '-';
         const clockIn = entry.clockInTime
-          ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+          ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' })
           : '-';
         const clockOut = entry.clockOutTime
-          ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+          ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' })
           : 'Active';
 
         const regularHrs = ((entry.regularMinutes || 0) / 60).toFixed(1);
@@ -1522,7 +1522,7 @@ export class TimeEntriesService {
 
     for (const entry of entries) {
       const date = entry.clockInTime 
-        ? new Date(entry.clockInTime).toLocaleDateString('en-US')
+        ? new Date(entry.clockInTime).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })
         : '';
       
       const regularHours = ((entry.regularMinutes || 0) / 60).toFixed(2);
@@ -1650,13 +1650,13 @@ export class TimeEntriesService {
 
     for (const entry of entries) {
       const date = entry.clockInTime 
-        ? new Date(entry.clockInTime).toLocaleDateString('en-US')
+        ? new Date(entry.clockInTime).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })
         : '';
       const clockIn = entry.clockInTime
-        ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' })
         : '';
       const clockOut = entry.clockOutTime
-        ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Los_Angeles' })
         : '';
 
       const escapeCsv = (val: string) => {
@@ -1824,10 +1824,10 @@ export class TimeEntriesService {
     ].join(','));
 
     const periodStart = filters.startDate 
-      ? new Date(filters.startDate).toLocaleDateString('en-US')
+      ? new Date(filters.startDate).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })
       : '';
     const periodEnd = filters.endDate
-      ? new Date(filters.endDate).toLocaleDateString('en-US')
+      ? new Date(filters.endDate).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })
       : '';
 
     const byEmployee: Record<string, any[]> = {};
@@ -1923,7 +1923,7 @@ export class TimeEntriesService {
       const firstName = nameParts[0] || '';
       const lastName = nameParts.slice(1).join(' ') || '';
       const checkDate = entry.clockInTime 
-        ? new Date(entry.clockInTime).toLocaleDateString('en-US')
+        ? new Date(entry.clockInTime).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' })
         : '';
       const rate = entry.hourlyRate ? Number(entry.hourlyRate) : 0;
 
