@@ -1090,8 +1090,8 @@ export class TimeEntriesService {
 
     const byJobSite: Record<string, any> = {};
     for (const entry of entries) {
-      const jobId = entry.jobId || 'unassigned';
-      const jobName = entry.job?.name || 'Unassigned';
+      const jobId = entry.jobId || 'General';
+      const jobName = entry.job?.name || 'General';
       
       if (!byJobSite[jobId]) {
         byJobSite[jobId] = {
@@ -1213,7 +1213,7 @@ export class TimeEntriesService {
       sheet.addRow([
         entry.user?.name || 'Unknown',
         entry.clockInTime ? new Date(entry.clockInTime).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' }) : '-',
-        entry.job?.name || 'Unassigned',
+        entry.job?.name || 'General',
         entry.clockInTime ? new Date(entry.clockInTime).toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles' }) : '-',
         entry.clockOutTime ? new Date(entry.clockOutTime).toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles' }) : 'Active',
         entry.breakMinutes || 0,
@@ -1392,7 +1392,7 @@ export class TimeEntriesService {
         workerTotalPay += entry.laborCost ? Number(entry.laborCost) : 0;
 
         doc.text(date, 45, yPos + 4, { width: 55 });
-        doc.text((entry.job?.name || 'Unassigned').substring(0, 18), 100, yPos + 4, { width: 120 });
+        doc.text((entry.job?.name || 'General').substring(0, 18), 100, yPos + 4, { width: 120 });
         doc.text(clockIn, 220, yPos + 4, { width: 50 });
         doc.text(clockOut, 270, yPos + 4, { width: 50 });
         doc.text(`${entry.breakMinutes || 0}m`, 320, yPos + 4, { width: 35 });
@@ -1545,7 +1545,7 @@ export class TimeEntriesService {
 
       lines.push([
         escapeCsv(entry.user?.name || 'Unknown'),
-        escapeCsv(entry.job?.name || 'Unassigned'),
+        escapeCsv(entry.job?.name || 'General'),
         'Labor',
         date,
         regularHours,
@@ -1670,7 +1670,7 @@ export class TimeEntriesService {
         escapeCsv(entry.user?.name || 'Unknown'),
         entry.userId,
         date,
-        escapeCsv(entry.job?.name || 'Unassigned'),
+        escapeCsv(entry.job?.name || 'General'),
         clockIn,
         clockOut,
         (entry.breakMinutes || 0).toString(),
